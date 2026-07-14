@@ -1,48 +1,38 @@
 <div align="right">
 
-**English** · [简体中文](README.zh-CN.md)
+[English](README.en.md) · **简体中文**
 
 </div>
 
-# Soundtrack · 声轨
+# 声轨 · Soundtrack
 
-A modern web-based music **search / download / player** built on top of [musicdl](https://github.com/CharlesPikachu/musicdl).
-Supports NetEase Cloud Music, Kuwo, QQ Music, and Migu. **Only Migu is enabled by default** — the rest are one click away in the UI.
+一个基于 [musicdl](https://github.com/CharlesPikachu/musicdl) 的现代化音乐 **搜索 / 下载 / 播放器**（Web 界面）。
+支持网易云、酷我、QQ、咪咕四个音乐源，**默认只开启咪咕**，其余在界面顶部一键启用。
 
 ![soundtrack](soundtrack.png)
 
-## Why it doesn't freeze
-
-musicdl's search is slow because it resolves the **real audio URL for every single result** (multiple network round-trips). A naive blocking `music_client.search()` makes the UI hang for 10–30 seconds. This project avoids that with a few techniques:
-
-- **Per-result streaming.** The backend drives musicdl's `_search` directly, watches the result list it fills in as it resolves each track, and pushes every track to the browser the instant it's ready via Server-Sent Events (SSE). Results appear one by one instead of all at once after a long wait.
-- **Concurrent sources.** Each music source runs on its own thread, so fast sources (Migu) show up first and slow ones never block them.
-- **Watchdog timeout.** Any source that hangs longer than `PER_SOURCE_TIMEOUT` seconds is dropped and flagged, so one stuck platform can never freeze the whole UI.
-- **Instant playback.** The direct URL is already resolved during search, so playback streams through a backend proxy (with HTTP Range support for seeking) — no need to download the full track first.
-- **Live download progress.** Chunked downloads report downloaded MB and speed in real time.
-
-## Run
+## 运行
 
 ```bash
 pip install -r requirements.txt
 python app.py
-# open http://127.0.0.1:5000 in your browser
+# 浏览器打开 http://127.0.0.1:5000
 ```
 
-Use `PORT=8080 python app.py` to pick a different port. Downloaded files are saved under `downloads/<source>/`.
+可用 `PORT=8080 python app.py` 指定端口。下载的文件保存在 `downloads/<源>/` 下。
 
-## Build the macOS app
+## 构建 macOS 应用
 
 ```bash
 make app
 open dist/Soundtrack.app
 ```
 
-The build command installs the desktop-only packaging tools into `.venv`. The app saves downloaded music under `~/Downloads/Soundtrack/`.
+构建命令会把仅桌面版需要的打包工具安装到 `.venv`。应用下载的音乐保存在 `~/Downloads/Soundtrack/`。
 
-## Build the Windows app
+## 构建 Windows 应用
 
-Run in PowerShell on Windows:
+在 Windows PowerShell 中运行：
 
 ```powershell
 py -m venv .venv
@@ -50,38 +40,38 @@ py -m venv .venv
 .\build-windows.ps1
 ```
 
-The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run the `Windows app` workflow from GitHub Actions and download its artifact.
+程序生成在 `dist\Soundtrack\Soundtrack.exe`。也可以在 GitHub Actions 中运行 `Windows app` 工作流并下载构建产物。
 
-> ⚠️ You need a network environment that can reach the music platforms. For learning and research only — please respect copyright and each platform's terms of service.
+> ⚠️ 需要能正常访问各音乐平台的网络环境。本工具仅供学习研究，请尊重版权与各平台条款。
 
-## Usage
+## 使用
 
-- Type a keyword in the top bar to search; results stream in one by one.
-- Toggle music sources with the chips at the top (only Migu is on by default).
-- Each row: ▷ play, ⭳ download. Double-clicking a row also plays it.
-- Bottom player bar: previous / play-pause / next, seek, volume, live spectrum.
-- The "词" button opens the synced lyrics panel; the button in the bottom-right opens the downloads list.
-- Shortcuts: `Space` to play/pause, `Alt+←/→` for previous/next track.
+- 顶部输入关键词搜索，结果逐条流式出现。
+- 顶部芯片切换音乐源（默认仅咪咕）。
+- 每行：▷ 播放，⭳ 下载。双击行也可播放。
+- 底部播放条：上一首 / 播放暂停 / 下一首、进度拖动、音量、实时频谱。
+- 「词」按钮打开同步歌词面板；右下角按钮打开下载列表。
+- 快捷键：空格播放/暂停，`Alt+←/→` 上一首/下一首。
 
-## Structure
+## 结构
 
 ```
-app.py             Flask backend: streaming search (SSE) / audio proxy (Range) / cover proxy / download progress (SSE)
-static/index.html  UI markup
-static/style.css   Visual styling (dark "recording-studio" theme)
-static/app.js      Frontend logic: streaming render / Web Audio spectrum / synced lyrics / downloads
+app.py             Flask 后端：流式搜索(SSE) / 音频代理(Range) / 封面代理 / 下载进度(SSE)
+static/index.html  界面结构
+static/style.css   视觉样式（深色"录音棚"主题）
+static/app.js      前端逻辑：流式渲染 / Web Audio 频谱 / 同步歌词 / 下载
 ```
 
-## Configuration
+## 调整
 
-Constants at the top of `app.py`:
+`app.py` 顶部常量：
 
-- `SUPPORTED_SOURCES` — add or remove music sources, change which are on by default.
-- `SEARCH_SIZE_PER_SOURCE` — how many tracks to resolve per source (larger = slower).
-- `PER_SOURCE_TIMEOUT` — per-source timeout in seconds.
+- `SUPPORTED_SOURCES` —— 增删音乐源、改默认开关。
+- `SEARCH_SIZE_PER_SOURCE` —— 每个源尝试解析的歌曲数（越大越慢）。
+- `PER_SOURCE_TIMEOUT` —— 单源超时秒数。
 
-For member-quality audio, pass `default_search_cookies` to the relevant source inside `ClientManager._build()`, following the official musicdl docs.
+如需会员音质，可在 `ClientManager._build()` 里给对应源加 `default_search_cookies`，用法同 musicdl 官方文档。
 
-## Credits
+## 致谢
 
-Built on [CharlesPikachu/musicdl](https://github.com/CharlesPikachu/musicdl). All search and audio-resolution logic comes from musicdl; this project adds the streaming web UI, player, and download experience.
+基于 [CharlesPikachu/musicdl](https://github.com/CharlesPikachu/musicdl) 构建。所有搜索与音频解析逻辑均来自 musicdl；本项目在其之上提供了流式 Web 界面、播放器与下载体验。

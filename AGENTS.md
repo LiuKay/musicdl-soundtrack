@@ -7,7 +7,7 @@ This is a compact Flask application with a framework-free frontend:
 - `app.py` contains the API, search stream, media proxies, downloads, and runtime configuration.
 - `static/index.html`, `static/app.js`, and `static/style.css` contain the page markup, browser behavior, and visual theme.
 - `requirements.txt` declares Python dependencies.
-- `README.md` and `README.zh-CN.md` document usage in English and Chinese; keep them aligned when behavior changes.
+- `README.md` and `README.en.md` document usage in Chinese and English; keep them aligned when behavior changes.
 - `screenshot.png` shows the expected UI. Generated files under `downloads/` and local virtual environments are not source artifacts.
 
 ## Build, Test, and Development Commands
