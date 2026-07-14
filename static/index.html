@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>声轨 · Soundtrack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="grain"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" id="brandMark">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="brand-text">
+      <h1>声轨</h1>
+      <p>Soundtrack · powered by musicdl</p>
+    </div>
+  </div>
+
+  <form class="search" id="searchForm" autocomplete="off">
+    <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <input id="searchInput" type="text" placeholder="搜索歌曲、艺人…" spellcheck="false">
+    <button type="submit" id="searchBtn">搜索</button>
+  </form>
+</header>
+
+<div class="sourcebar">
+  <span class="sourcebar-label">音乐源</span>
+  <div class="chips" id="chips"></div>
+  <span class="sourcebar-hint" id="searchStatus"></span>
+</div>
+
+<main class="results-wrap">
+  <div class="results-head" id="resultsHead" hidden>
+    <span class="col col-cover"></span>
+    <span class="col col-title">曲目</span>
+    <span class="col col-album">专辑</span>
+    <span class="col col-dur">时长</span>
+    <span class="col col-size">大小</span>
+    <span class="col col-src">来源</span>
+    <span class="col col-act"></span>
+  </div>
+  <ul class="results" id="results"></ul>
+
+  <div class="placeholder" id="placeholder">
+    <div class="placeholder-viz">
+      <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <h2>从一句歌词开始</h2>
+    <p>输入关键词，结果会随搜索逐条浮现 —— 不必等待整页加载。</p>
+  </div>
+</main>
+
+<!-- Lyrics panel -->
+<aside class="lyrics-panel" id="lyricsPanel">
+  <div class="lyrics-head">
+    <span>歌词</span>
+    <button id="lyricsClose" aria-label="关闭歌词">✕</button>
+  </div>
+  <div class="lyrics-scroll" id="lyricsScroll"></div>
+</aside>
+
+<!-- Downloads drawer -->
+<aside class="dl-drawer" id="dlDrawer">
+  <div class="dl-head">
+    <span>下载</span>
+    <button id="dlClose" aria-label="关闭下载面板">✕</button>
+  </div>
+  <ul class="dl-list" id="dlList"></ul>
+</aside>
+
+<!-- Now playing bar -->
+<footer class="player" id="player" data-empty="true">
+  <div class="np-meta">
+    <div class="np-cover" id="npCover"><div class="np-cover-fallback">♪</div></div>
+    <div class="np-text">
+      <div class="np-title" id="npTitle">未在播放</div>
+      <div class="np-artist" id="npArtist">选择一首歌开始</div>
+    </div>
+    <button class="np-lyric-btn" id="lyricsToggle" title="歌词">词</button>
+  </div>
+
+  <div class="np-center">
+    <div class="transport">
+      <button id="prevBtn" class="t-btn" aria-label="上一首"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M7 5v14M19 5L9 12l10 7z" fill="currentColor"/></svg></button>
+      <button id="playBtn" class="t-btn play" aria-label="播放/暂停">
+        <svg class="ic-play" viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+        <svg class="ic-pause" viewBox="0 0 24 24" width="22" height="22" hidden><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/></svg>
+      </button>
+      <button id="nextBtn" class="t-btn" aria-label="下一首"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M17 5v14M5 5l10 7L5 19z" fill="currentColor"/></svg></button>
+    </div>
+    <div class="seek">
+      <span class="time" id="curTime">0:00</span>
+      <div class="seek-track" id="seekTrack"><div class="seek-fill" id="seekFill"></div><div class="seek-knob" id="seekKnob"></div></div>
+      <span class="time" id="durTime">0:00</span>
+    </div>
+  </div>
+
+  <div class="np-right">
+    <canvas class="viz" id="viz" width="220" height="44"></canvas>
+    <div class="vol">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 9v6h4l5 5V4L8 9H4z" fill="currentColor"/></svg>
+      <div class="vol-track" id="volTrack"><div class="vol-fill" id="volFill"></div></div>
+    </div>
+  </div>
+</footer>
+
+<audio id="audio" crossorigin="anonymous"></audio>
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

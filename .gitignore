@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+.venv/
+.runtime-home/
+.env
+
+downloads/
+musicdl_outputs/
+*.part
+*.log
+
+build/
+dist/
+*.egg-info/
+.eggs/
