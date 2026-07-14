@@ -40,6 +40,18 @@ open dist/Soundtrack.app
 
 The build command installs the desktop-only packaging tools into `.venv`. The app saves downloaded music under `~/Downloads/Soundtrack/`.
 
+## Build the Windows app
+
+Run in PowerShell on Windows:
+
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+.\build-windows.ps1
+```
+
+The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run the `Windows app` workflow from GitHub Actions and download its artifact.
+
 > ⚠️ You need a network environment that can reach the music platforms. For learning and research only — please respect copyright and each platform's terms of service.
 
 ## Usage

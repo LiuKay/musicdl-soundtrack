@@ -40,6 +40,18 @@ open dist/Soundtrack.app
 
 构建命令会把仅桌面版需要的打包工具安装到 `.venv`。应用下载的音乐保存在 `~/Downloads/Soundtrack/`。
 
+## 构建 Windows 应用
+
+在 Windows PowerShell 中运行：
+
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+.\build-windows.ps1
+```
+
+程序生成在 `dist\Soundtrack\Soundtrack.exe`。也可以在 GitHub Actions 中运行 `Windows app` 工作流并下载构建产物。
+
 > ⚠️ 需要能正常访问各音乐平台的网络环境。本工具仅供学习研究，请尊重版权与各平台条款。
 
 ## 使用
