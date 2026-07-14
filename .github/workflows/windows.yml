@@ -1,0 +1,27 @@
+name: Windows app
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build
+        shell: pwsh
+        run: .\build-windows.ps1
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $app = Start-Process '.\dist\Soundtrack\Soundtrack.exe' -PassThru
+          Start-Sleep -Seconds 10
+          if ($app.HasExited) { throw "Soundtrack exited with code $($app.ExitCode)" }
+          Stop-Process -Id $app.Id
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Soundtrack-Windows
+          path: dist/Soundtrack
