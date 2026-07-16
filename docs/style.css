@@ -1,0 +1,331 @@
+:root {
+  color-scheme: dark;
+  --canvas: oklch(13% 0.008 75);
+  --surface-raised: oklch(22% 0.014 75);
+  --text: oklch(92% 0.015 78);
+  --text-muted: oklch(70% 0.018 78);
+  --line: oklch(38% 0.018 78 / 45%);
+  --amber: oklch(78% 0.145 72);
+  --amber-ink: oklch(18% 0.03 63);
+  --radius-small: 4px;
+  --radius-medium: 10px;
+  --radius-large: 18px;
+  font-family: "Avenir Next", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--canvas);
+}
+
+body {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  background-color: var(--canvas);
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent 0,
+    transparent 79px,
+    oklch(78% 0.145 72 / 2.5%) 80px
+  );
+}
+
+.site-shell {
+  width: min(1180px, calc(100% - 48px));
+  margin-inline: auto;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: max(72px, env(safe-area-inset-bottom));
+}
+
+.intro {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
+  gap: clamp(32px, 8vw, 112px);
+  align-items: start;
+  padding-block: clamp(64px, 10vw, 128px) clamp(48px, 7vw, 88px);
+}
+
+.eyebrow,
+.section-label p,
+.action-kicker,
+.action-index {
+  margin: 0;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.eyebrow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding-top: 0.7rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.eyebrow span {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 18px oklch(78% 0.145 72 / 70%);
+}
+
+.intro-copy h1 {
+  max-width: 780px;
+  margin: 0;
+  font-family: "Avenir Next Condensed", "Arial Narrow", "PingFang SC", sans-serif;
+  font-size: clamp(3.5rem, 8.5vw, 7.75rem);
+  font-weight: 700;
+  line-height: 0.86;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+.intro-copy h1 span {
+  display: block;
+  margin-top: 0.12em;
+  color: var(--amber);
+  font-size: 0.46em;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.022em;
+}
+
+.intro-copy > p {
+  max-width: 38rem;
+  margin: 2rem 0 0;
+  color: var(--text-muted);
+  font-size: clamp(1rem, 1.6vw, 1.25rem);
+  line-height: 1.85;
+  text-wrap: pretty;
+}
+
+.interface {
+  padding-bottom: clamp(72px, 10vw, 128px);
+}
+
+.section-label {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
+  gap: clamp(32px, 8vw, 112px);
+  align-items: end;
+  margin-bottom: 24px;
+}
+
+.section-label p,
+.action-kicker {
+  color: var(--amber);
+}
+
+.section-label h2,
+.action-copy h2 {
+  margin: 0;
+  font-size: clamp(1.35rem, 2.7vw, 2.25rem);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+
+.interface-frame {
+  margin: 0;
+  padding: 8px;
+  overflow: hidden;
+  border-radius: var(--radius-large);
+  background: var(--surface-raised);
+  box-shadow:
+    inset 0 0 0 1px oklch(92% 0.015 78 / 8%),
+    0 28px 80px oklch(5% 0.008 75 / 50%);
+}
+
+.interface-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-medium);
+  outline: 1px solid oklch(92% 0.015 78 / 10%);
+  outline-offset: -1px;
+}
+
+.interface-frame figcaption {
+  padding: 10px 6px 4px;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-align: right;
+}
+
+.action-row {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr) auto;
+  gap: clamp(20px, 4vw, 56px);
+  align-items: center;
+  min-height: 190px;
+  padding-block: 36px;
+  border-top: 1px solid var(--line);
+}
+
+.action-row-download {
+  border-bottom: 1px solid var(--line);
+}
+
+.action-index {
+  align-self: start;
+  padding-top: 0.2rem;
+  color: var(--text-muted);
+}
+
+.action-copy h2 {
+  margin-top: 10px;
+}
+
+.action-copy > p:last-child {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+.action-link {
+  display: inline-flex;
+  gap: 28px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 210px;
+  min-height: 48px;
+  padding: 13px 16px 13px 20px;
+  border-radius: var(--radius-small);
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.2;
+  text-decoration: none;
+  touch-action: manipulation;
+  transition-property: transform;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.action-link-secondary {
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px oklch(92% 0.015 78 / 10%);
+}
+
+.action-link-primary {
+  color: var(--amber-ink);
+  background: var(--amber);
+  box-shadow: 0 10px 30px oklch(78% 0.145 72 / 14%);
+}
+
+.action-link:focus-visible {
+  outline: 3px solid var(--amber);
+  outline-offset: 4px;
+  box-shadow: 0 0 0 7px var(--canvas);
+}
+
+.action-link:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+@media (hover: hover) {
+  .action-link:hover {
+    transform: translateY(-2px);
+  }
+}
+
+@media (max-width: 700px) {
+  .site-shell {
+    width: min(100% - 32px, 1180px);
+    padding-bottom: max(48px, env(safe-area-inset-bottom));
+  }
+
+  .intro {
+    display: block;
+    padding-block: 52px 56px;
+  }
+
+  .eyebrow {
+    padding-top: 0;
+    margin-bottom: 36px;
+  }
+
+  .intro-copy h1 {
+    font-size: clamp(3.35rem, 17vw, 4.75rem);
+  }
+
+  .intro-copy > p {
+    margin-top: 1.5rem;
+    font-size: 1rem;
+    line-height: 1.75;
+  }
+
+  .interface {
+    padding-bottom: 72px;
+  }
+
+  .section-label {
+    display: block;
+    margin-bottom: 18px;
+  }
+
+  .section-label p {
+    margin-bottom: 10px;
+  }
+
+  .interface-frame {
+    padding: 4px;
+    border-radius: var(--radius-medium);
+  }
+
+  .interface-frame img {
+    border-radius: 6px;
+  }
+
+  .interface-frame figcaption {
+    padding: 8px 4px 3px;
+    font-size: 0.625rem;
+  }
+
+  .action-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 16px;
+    min-height: 0;
+    padding-block: 32px;
+  }
+
+  .action-copy h2 {
+    font-size: 1.5rem;
+  }
+
+  .action-link {
+    grid-column: 2;
+    width: 100%;
+    min-width: 0;
+    margin-top: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action-link {
+    transition: none;
+  }
+
+  .action-link:hover,
+  .action-link:active {
+    transform: none;
+  }
+}
