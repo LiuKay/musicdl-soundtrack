@@ -40,8 +40,16 @@ SUPPORTED_SOURCES = {
     'NeteaseMusicClient': {'label': '网易云音乐', 'short': 'Netease', 'default': False},
     'KuwoMusicClient':    {'label': '酷我音乐', 'short': 'Kuwo',    'default': False},
     'QQMusicClient':      {'label': 'QQ音乐',   'short': 'QQ',      'default': False},
+    'KugouMusicClient':   {'label': '酷狗音乐', 'short': 'Kugou',   'default': False},
+    'FiveSingMusicClient': {'label': '5sing',   'short': '5sing',   'default': False},
+    'JamendoMusicClient': {'label': 'Jamendo',  'short': 'Jamendo', 'default': False},
+    'SpotifyMusicClient': {'label': 'Spotify',  'short': 'Spotify', 'default': False},
 }
-SOURCE_ORDER = ['MiguMusicClient', 'NeteaseMusicClient', 'KuwoMusicClient', 'QQMusicClient']
+SOURCE_ORDER = [
+    'MiguMusicClient', 'NeteaseMusicClient', 'KuwoMusicClient', 'QQMusicClient',
+    'KugouMusicClient', 'FiveSingMusicClient', 'JamendoMusicClient',
+    'SpotifyMusicClient',
+]
 
 SEARCH_SIZE_PER_SOURCE = 8       # how many tracks to try to resolve per source
 PER_SOURCE_TIMEOUT = 35          # seconds before a hanging source is abandoned
@@ -224,7 +232,7 @@ def _safe_search(client, keyword, url, bucket, progress):
 
 
 def _drain(buckets, cursors, source, seen, lock, emit):
-    '''Emit every newly-appeared track across all page buckets; dedup by id.'''
+    '''Emit every newly-appeared track; dedup identifiers within each source.'''
     emitted = 0
     for i, bucket in enumerate(buckets):
         while cursors[i] < len(bucket):
@@ -232,10 +240,11 @@ def _drain(buckets, cursors, source, seen, lock, emit):
             cursors[i] += 1
             try:
                 ident = str(getattr(song_info, 'identifier', None))
+                dedup_key = (source, ident)
                 with lock:
-                    if ident in seen:
+                    if dedup_key in seen:
                         continue
-                    seen.add(ident)
+                    seen.add(dedup_key)
                 token = REGISTRY.add(song_info, source)
                 emit('result', _track_payload(song_info, token))
                 emitted += 1
@@ -254,6 +263,26 @@ DL_LOCK = threading.Lock()
 def _safe_name(name):
     name = re.sub(r'[\\/:*?"<>|]', '_', name or 'track').strip()
     return name[:120] or 'track'
+
+
+def _parse_byte_range(value, total_size):
+    '''Parse one HTTP byte range against a known resource size.'''
+    if not value.startswith('bytes=') or ',' in value or total_size <= 0:
+        return None
+    try:
+        start_text, end_text = value[6:].split('-', 1)
+        if start_text:
+            start = int(start_text)
+            end = int(end_text) if end_text else total_size - 1
+            if start < 0 or start >= total_size or end < start:
+                return None
+            return start, min(end, total_size - 1)
+        suffix_size = int(end_text)
+        if suffix_size <= 0:
+            return None
+        return max(total_size - suffix_size, 0), total_size - 1
+    except (TypeError, ValueError):
+        return None
 
 
 def run_download(download_id, token):
@@ -395,15 +424,37 @@ def api_stream(token):
         if h in up.headers:
             resp_headers[h] = up.headers[h]
 
+    response_status = up.status_code
+    range_window = None
+    downloaded_contents = None
+    if range_header and up.status_code == 200:
+        cached_contents = getattr(song, 'downloaded_contents', None)
+        if isinstance(cached_contents, (bytes, bytearray, memoryview)):
+            downloaded_contents = cached_contents
+            total_size = len(downloaded_contents)
+        else:
+            total_size = 0
+        range_window = _parse_byte_range(range_header, total_size)
+        if range_window:
+            start, end = range_window
+            response_status = 206
+            resp_headers['Content-Length'] = str(end - start + 1)
+            resp_headers['Content-Range'] = f'bytes {start}-{end}/{total_size}'
+
     def generate():
         try:
+            if range_window and downloaded_contents is not None:
+                start, end = range_window
+                for offset in range(start, end + 1, 64 * 1024):
+                    yield bytes(downloaded_contents[offset:min(offset + 64 * 1024, end + 1)])
+                return
             for chunk in up.iter_content(chunk_size=64 * 1024):
                 if chunk:
                     yield chunk
         finally:
             up.close()
 
-    return Response(stream_with_context(generate()), status=up.status_code,
+    return Response(stream_with_context(generate()), status=response_status,
                     headers=resp_headers)
 
 

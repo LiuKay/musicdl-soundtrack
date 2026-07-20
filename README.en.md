@@ -7,7 +7,7 @@
 # Soundtrack · 声轨
 
 A modern web-based music **search / download / player** built on top of [musicdl](https://github.com/CharlesPikachu/musicdl).
-Supports NetEase Cloud Music, Kuwo, QQ Music, and Migu. **Only Migu is enabled by default** — the rest are one click away in the UI.
+Supports eight sources: Migu, NetEase Cloud Music, Kuwo, QQ Music, Kugou, 5sing, Jamendo, and Spotify. **Migu is the only source enabled by default** — the rest are one click away in the UI.
 
 ![soundtrack](soundtrack.png)
 
@@ -81,6 +81,8 @@ Constants at the top of `app.py`:
 - `PER_SOURCE_TIMEOUT` — per-source timeout in seconds.
 
 For member-quality audio, pass `default_search_cookies` to the relevant source inside `ClientManager._build()`, following the official musicdl docs.
+
+Soundtrack only consumes direct audio URLs resolved by musicdl during search. This phase does not implement source-specific media decryption, HLS segment merging, media transcoding, or source-specific musicdl `_download` flows; content that requires login cookies, a paid account, or any of those special paths is unsupported. Apple Music, Deezer, Joox, Qianqian, Qobuz, SoundCloud, StreetVoice, Soda Music, and TIDAL are not included in this phase, and TIDAL's dedicated download handling is unsupported.
 
 ## Credits
 

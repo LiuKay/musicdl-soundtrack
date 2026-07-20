@@ -7,7 +7,7 @@
 # 声轨 · Soundtrack
 
 一个基于 [musicdl](https://github.com/CharlesPikachu/musicdl) 的现代化音乐 **搜索 / 下载 / 播放器**（Web 界面）。
-支持网易云、酷我、QQ、咪咕四个音乐源，**默认只开启咪咕**，其余在界面顶部一键启用。
+支持咪咕、网易云、酷我、QQ、酷狗、5sing、Jamendo 和 Spotify 共八个音乐源。**咪咕是唯一默认开启的来源**，其余在界面顶部一键启用。
 
 ![soundtrack](soundtrack.png)
 
@@ -71,6 +71,8 @@ static/app.js      前端逻辑：流式渲染 / Web Audio 频谱 / 同步歌词
 - `PER_SOURCE_TIMEOUT` —— 单源超时秒数。
 
 如需会员音质，可在 `ClientManager._build()` 里给对应源加 `default_search_cookies`，用法同 musicdl 官方文档。
+
+Soundtrack 只使用 musicdl 在搜索阶段解析出的直接音频 URL。本阶段不实现专用媒体解密、HLS 分片合并或媒体转码，也不调用来源专用的 musicdl `_download` 流程；需要登录 cookies、付费账户或上述专用处理的内容不受支持。Apple Music、Deezer、Joox、千千音乐、Qobuz、SoundCloud、StreetVoice、汽水音乐和 TIDAL 本阶段未加入，其中 TIDAL 的专用下载处理不受支持。
 
 ## 致谢
 
