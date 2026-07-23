@@ -38,7 +38,7 @@ make app
 open dist/Soundtrack.app
 ```
 
-The build command installs the desktop-only packaging tools into `.venv`. The app saves downloaded music under `~/Downloads/Soundtrack/`; “Cache while playing” files are stored under `~/Library/Caches/Soundtrack/audio/`.
+The build command installs the desktop-only packaging tools into `.venv`. The app saves music under `~/Downloads/Soundtrack/` by default, and the download drawer can select another folder; “Cache while playing” files are stored under `~/Library/Caches/Soundtrack/audio/`.
 
 ## Build the Windows app
 
@@ -61,7 +61,9 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run 
 - Each row: ▷ play, ⭳ download. Double-clicking a row also plays it.
 - Bottom player bar: previous / play-pause / next, seek, volume, live spectrum.
 - “Cache while playing” keeps listened tracks locally and removes the oldest cache files when the selected 512 MB–5 GB limit is exceeded.
-- The "词" button opens the synced lyrics panel; the button in the bottom-right opens the downloads list.
+- The download drawer can run 1–5 downloads at once; additional tasks wait in click order.
+- The "词" button opens the synced lyrics panel; the bottom-right button opens downloads, changes the download folder, and plays downloaded tracks inside the existing player.
+- New downloads create a matching `.lrc` and try to embed title, artist, album, lyrics, and artwork into MP3, FLAC, M4A, and OGG files; internal `.soundtrack.json` and `.soundtrack.cover.jpg/.png/...` files remain only as app index/fallback data.
 - Shortcuts: `Space` to play/pause, `Alt+←/→` for previous/next track.
 
 ## Structure

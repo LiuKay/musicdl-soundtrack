@@ -85,7 +85,37 @@
     <span>下载</span>
     <button id="dlClose" aria-label="关闭下载面板">✕</button>
   </div>
-  <ul class="dl-list" id="dlList"></ul>
+  <div class="dl-folder">
+    <div>
+      <span class="dl-folder-label">下载目录</span>
+      <span class="dl-folder-path" id="downloadDir">~/Downloads/Soundtrack</span>
+    </div>
+    <button id="chooseDownloadDir" type="button" hidden>选择</button>
+  </div>
+  <label class="dl-concurrency" for="downloadConcurrency">
+    <span>同时下载</span>
+    <select id="downloadConcurrency" aria-label="同时下载歌曲数">
+      <option value="1">1 首</option>
+      <option value="2">2 首</option>
+      <option value="3" selected>3 首</option>
+      <option value="4">4 首</option>
+      <option value="5">5 首</option>
+    </select>
+  </label>
+  <div class="dl-scroll">
+    <section class="dl-section">
+      <div class="dl-section-title">下载中</div>
+      <ul class="dl-list" id="dlList">
+        <li class="dl-empty">暂无下载任务</li>
+      </ul>
+    </section>
+    <section class="dl-section">
+      <div class="dl-section-title">已下载 <span id="libraryCount">0</span></div>
+      <ul class="library-list" id="libraryList">
+        <li class="dl-empty">暂无已下载歌曲</li>
+      </ul>
+    </section>
+  </div>
 </aside>
 
 <!-- Now playing bar -->
