@@ -18,9 +18,13 @@ import time
 import uuid
 import json
 import queue
+import hashlib
 import threading
 import requests
-from flask import Flask, request, Response, jsonify, send_from_directory, stream_with_context
+from flask import (
+    Flask, request, Response, jsonify, send_file, send_from_directory,
+    stream_with_context,
+)
 
 from musicdl import musicdl
 
@@ -31,6 +35,9 @@ from musicdl import musicdl
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(os.environ.get('RESOURCEPATH', HERE), 'static')
 DOWNLOAD_DIR = os.environ.get('SOUNDTRACK_DOWNLOAD_DIR', os.path.join(HERE, 'downloads'))
+CACHE_DIR = os.environ.get(
+    'SOUNDTRACK_CACHE_DIR', os.path.join(HERE, '.runtime-home', 'cache'),
+)
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # All sources we expose. Only Migu is enabled by default (per requirement);
@@ -113,6 +120,112 @@ class TrackRegistry:
 
 
 REGISTRY = TrackRegistry()
+
+CACHE_JOBS = set()
+CACHE_LOCK = threading.Lock()
+
+
+def _cache_key(entry):
+    song = entry['song_info']
+    fields = (
+        entry['source'],
+        getattr(song, 'song_name', ''),
+        getattr(song, 'singers', ''),
+        getattr(song, 'album', ''),
+        getattr(song, 'ext', ''),
+        getattr(song, 'file_size', ''),
+        getattr(song, 'file_size_bytes', ''),
+    )
+    return hashlib.sha256('\0'.join(map(str, fields)).encode()).hexdigest()
+
+
+def _cache_path(entry):
+    ext = re.sub(
+        r'[^a-z0-9]', '',
+        str(getattr(entry['song_info'], 'ext', '')).lower(),
+    ) or 'audio'
+    return os.path.join(CACHE_DIR, f'{_cache_key(entry)}.{ext}')
+
+
+def _cache_limit():
+    try:
+        value = int(request.args.get('cache_max_mb', 1024))
+    except (TypeError, ValueError):
+        value = 1024
+    return min(5120, max(128, value)) * 1024 * 1024
+
+
+def _prune_cache(max_bytes, keep=None):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    # ponytail: directory mtime is the LRU index; add a database only if this scan becomes slow.
+    with CACHE_LOCK:
+        files = []
+        for name in os.listdir(CACHE_DIR):
+            path = os.path.join(CACHE_DIR, name)
+            if name.endswith('.part') or not os.path.isfile(path):
+                continue
+            try:
+                stat = os.stat(path)
+                files.append((stat.st_mtime, stat.st_size, path, path == keep))
+            except OSError:
+                pass
+        total = sum(size for _, size, _, _ in files)
+        for _, size, path, is_kept in sorted(files):
+            if total <= max_bytes:
+                break
+            if is_kept:
+                continue
+            try:
+                os.remove(path)
+                total -= size
+            except OSError:
+                pass
+
+
+def _cache_audio(entry, path, max_bytes):
+    key = _cache_key(entry)
+    tmp = path + '.part'
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        url = getattr(entry['song_info'], 'download_url', None)
+        with requests.get(url, headers=entry['headers'], cookies=entry['cookies'],
+                          stream=True, timeout=(10, 30), verify=False) as resp:
+            resp.raise_for_status()
+            total = int(float(resp.headers.get('Content-Length', 0) or 0))
+            if total > max_bytes:
+                return
+            written = 0
+            with open(tmp, 'wb') as fp:
+                for chunk in resp.iter_content(chunk_size=256 * 1024):
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if written > max_bytes:
+                        return
+                    fp.write(chunk)
+        if written:
+            os.replace(tmp, path)
+            _prune_cache(max_bytes, keep=path)
+    except Exception:
+        pass
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        with CACHE_LOCK:
+            CACHE_JOBS.discard(key)
+
+
+def _start_cache(entry, path, max_bytes):
+    key = _cache_key(entry)
+    with CACHE_LOCK:
+        if key in CACHE_JOBS or os.path.isfile(path):
+            return
+        CACHE_JOBS.add(key)
+    threading.Thread(
+        target=_cache_audio, args=(entry, path, max_bytes), daemon=True,
+    ).start()
 
 
 class _NullProgress:
@@ -403,6 +516,22 @@ def api_stream(token):
     if not isinstance(url, str) or not url.startswith('http'):
         return 'no audio url', 404
 
+    ext = (str(song.ext) or 'mp3').lstrip('.').lower()
+    if request.args.get('cache') == '1':
+        try:
+            max_bytes = _cache_limit()
+            path = _cache_path(entry)
+            _prune_cache(max_bytes)
+            if os.path.isfile(path):
+                os.utime(path)
+                return send_file(
+                    path, conditional=True,
+                    mimetype=RESULT_EXT_TO_MIME.get(ext, 'application/octet-stream'),
+                )
+            _start_cache(entry, path, max_bytes)
+        except OSError:
+            pass
+
     upstream_headers = dict(entry['headers'])
     range_header = request.headers.get('Range')
     if range_header:
@@ -414,7 +543,6 @@ def api_stream(token):
     except Exception as err:
         return f'upstream error: {err}', 502
 
-    ext = (str(song.ext) or 'mp3').lstrip('.').lower()
     resp_headers = {
         'Content-Type': RESULT_EXT_TO_MIME.get(ext, 'application/octet-stream'),
         'Accept-Ranges': 'bytes',

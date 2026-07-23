@@ -1,4 +1,6 @@
 import unittest
+import os
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -122,6 +124,70 @@ class SearchCompatibilityTest(unittest.TestCase):
         self.assertIsNone(app._parse_byte_range('bytes=3-6,8-9', 10))
         self.assertIsNone(app._parse_byte_range('bytes=10-', 10))
         self.assertIsNone(app._parse_byte_range('items=3-6', 10))
+
+    def test_stream_uses_cached_audio_and_prunes_oldest_file(self):
+        token = 'audio-cache-test'
+        entry = {
+            'song_info': SimpleNamespace(
+                download_url='https://example.test/audio.mp3',
+                song_name='Cached',
+                singers='Artist',
+                album='Album',
+                ext='mp3',
+                file_size='10 B',
+                file_size_bytes=10,
+            ),
+            'source': 'MiguMusicClient',
+            'headers': {},
+            'cookies': {},
+        }
+        app.REGISTRY._tracks[token] = entry
+        try:
+            with tempfile.TemporaryDirectory() as cache_dir, \
+                    mock.patch.object(app, 'CACHE_DIR', cache_dir), \
+                    mock.patch.object(app.requests, 'get') as get:
+                cached = app._cache_path(entry)
+                Path(cached).write_bytes(b'0123456789')
+                response = app.app.test_client().get(
+                    f'/api/stream/{token}?cache=1&cache_max_mb=128',
+                    headers={'Range': 'bytes=3-6'},
+                )
+                body = response.data
+                response.close()
+                old = Path(cache_dir) / 'old.mp3'
+                old.write_bytes(b'old')
+                os.utime(old, (1, 1))
+                app._prune_cache(10, keep=cached)
+                self.assertFalse(old.exists())
+        finally:
+            app.REGISTRY._tracks.pop(token, None)
+
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(body, b'3456')
+        get.assert_not_called()
+
+    def test_cache_audio_writes_complete_file(self):
+        entry = {
+            'song_info': SimpleNamespace(
+                download_url='https://example.test/audio.mp3',
+                song_name='Fresh', singers='Artist', album='Album',
+                ext='mp3', file_size='6 B', file_size_bytes=6,
+            ),
+            'source': 'MiguMusicClient',
+            'headers': {},
+            'cookies': {},
+        }
+        upstream = mock.MagicMock()
+        upstream.__enter__.return_value = upstream
+        upstream.headers = {'Content-Length': '6'}
+        upstream.iter_content.return_value = [b'abc', b'def']
+        with tempfile.TemporaryDirectory() as cache_dir, \
+                mock.patch.object(app, 'CACHE_DIR', cache_dir), \
+                mock.patch.object(app.requests, 'get', return_value=upstream):
+            path = app._cache_path(entry)
+            app._cache_audio(entry, path, 1024)
+            self.assertEqual(Path(path).read_bytes(), b'abcdef')
+        upstream.raise_for_status.assert_called_once()
 
     def test_lyric_endpoint_preserves_registered_song_lyric(self):
         token = 'lyric-compatibility-test'

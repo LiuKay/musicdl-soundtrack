@@ -34,6 +34,19 @@
   <span class="sourcebar-label">音乐源</span>
   <div class="chips" id="chips"></div>
   <span class="sourcebar-hint" id="searchStatus"></span>
+  <div class="cache-controls">
+    <label class="cache-toggle">
+      <input id="cacheToggle" type="checkbox">
+      <span class="cache-switch" aria-hidden="true"></span>
+      <span>边听边存</span>
+    </label>
+    <select id="cacheLimit" aria-label="缓存容量上限">
+      <option value="512">512 MB</option>
+      <option value="1024" selected>1 GB</option>
+      <option value="2048">2 GB</option>
+      <option value="5120">5 GB</option>
+    </select>
+  </div>
 </div>
 
 <main class="results-wrap">
