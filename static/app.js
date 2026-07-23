@@ -7,6 +7,8 @@ const $ = (s) => document.querySelector(s);
 const audio = $('#audio');
 const tracks = new Map();          // token -> payload
 let queue = [];                    // ordered tokens (play order)
+let activeQueue = queue;
+let libraryQueue = [];
 let currentToken = null;
 let searchES = null;
 let sources = [];
@@ -18,6 +20,25 @@ cacheToggle.checked = localStorage.getItem('soundtrack-cache-enabled') === '1';
 if ([...cacheLimit.options].some(o => o.value === savedCacheLimit)) cacheLimit.value = savedCacheLimit;
 cacheToggle.onchange = () => localStorage.setItem('soundtrack-cache-enabled', cacheToggle.checked ? '1' : '0');
 cacheLimit.onchange = () => localStorage.setItem('soundtrack-cache-limit', cacheLimit.value);
+const downloadConcurrency = $('#downloadConcurrency');
+const savedDownloadConcurrency = localStorage.getItem('soundtrack-download-concurrency');
+if ([...downloadConcurrency.options].some(o => o.value === savedDownloadConcurrency)) {
+  downloadConcurrency.value = savedDownloadConcurrency;
+}
+async function syncDownloadConcurrency(showToast = false) {
+  try {
+    await fetch('/api/download/concurrency', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ concurrency: Number(downloadConcurrency.value) })
+    }).then(r => r.json());
+    localStorage.setItem('soundtrack-download-concurrency', downloadConcurrency.value);
+    if (showToast) toast(`同时下载数：${downloadConcurrency.value}`);
+  } catch {
+    if (showToast) toast('无法更新同时下载数');
+  }
+}
+downloadConcurrency.onchange = () => syncDownloadConcurrency(true);
+syncDownloadConcurrency();
 
 /* ------------------------------------------------------------------ */
 /* sources / chips                                                     */
@@ -53,7 +74,8 @@ function runSearch() {
   if (!q) return;
   if (searchES) { searchES.close(); searchES = null; }
 
-  tracks.clear(); queue = [];
+  for (const [token, track] of tracks) { if (!track.local) tracks.delete(token); }
+  queue = [];
   $('#results').innerHTML = '';
   $('#placeholder').hidden = true;
   $('#resultsHead').hidden = false;
@@ -154,7 +176,7 @@ const esc = (s) => (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;
 /* ------------------------------------------------------------------ */
 /* playback + Web Audio visualizer                                     */
 /* ------------------------------------------------------------------ */
-let audioCtx = null, analyser = null, srcNode = null, vizData = null, vizRAF = null;
+let audioCtx = null, analyser = null, gainNode = null, srcNode = null, vizData = null, vizRAF = null;
 
 function ensureAudioGraph() {
   if (audioCtx) return;
@@ -162,25 +184,29 @@ function ensureAudioGraph() {
   audioCtx = new AC();
   srcNode = audioCtx.createMediaElementSource(audio);
   analyser = audioCtx.createAnalyser();
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = 0.75;
   analyser.fftSize = 128;
   analyser.smoothingTimeConstant = 0.8;
   srcNode.connect(analyser);
-  analyser.connect(audioCtx.destination);
+  analyser.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
   vizData = new Uint8Array(analyser.frequencyBinCount);
   drawViz();
 }
 
-function play(token) {
+function play(token, playQueue = queue) {
   const t = tracks.get(token);
   if (!t) return;
   currentToken = token;
+  activeQueue = playQueue;
   ensureAudioGraph();
   if (audioCtx.state === 'suspended') audioCtx.resume();
 
   const cacheQuery = cacheToggle.checked
     ? `?cache=1&cache_max_mb=${cacheLimit.value}`
     : '';
-  audio.src = `/api/stream/${token}${cacheQuery}`;
+  audio.src = t.stream_url || `/api/stream/${token}${cacheQuery}`;
   audio.play().catch(() => toast('无法播放该曲目'));
 
   // now-playing meta
@@ -191,22 +217,25 @@ function play(token) {
   cv.innerHTML = `<div class="np-cover-fallback">♪</div>`;
   if (t.cover_url) {
     const img = new Image();
-    img.onload = () => { cv.innerHTML = ''; cv.appendChild(img); };
-    img.src = `/api/cover/${token}`;
+    img.onload = () => {
+      if (currentToken === token) { cv.innerHTML = ''; cv.appendChild(img); }
+    };
+    img.src = t.local ? t.cover_url : `/api/cover/${token}`;
   }
 
-  document.querySelectorAll('.row.playing').forEach(r => r.classList.remove('playing'));
-  const row = document.querySelector(`.row[data-token="${token}"]`);
+  document.querySelectorAll('.row.playing,.library-item.playing').forEach(r => r.classList.remove('playing'));
+  const row = document.querySelector(`[data-token="${token}"]`);
   if (row) row.classList.add('playing');
 
-  loadLyrics(token);
+  if (t.local) showLyrics(t.lyric);
+  else loadLyrics(token);
 }
 
 function step(dir) {
   if (!currentToken) return;
-  const i = queue.indexOf(currentToken);
-  const next = queue[i + dir];
-  if (next) play(next);
+  const i = activeQueue.indexOf(currentToken);
+  const next = activeQueue[i + dir];
+  if (next) play(next, activeQueue);
 }
 
 $('#playBtn').onclick = () => {
@@ -239,8 +268,7 @@ function fmt(s) { if (!isFinite(s)) return '0:00'; s = Math.floor(s); return `${
 
 dragControl($('#seekTrack'), (ratio) => { if (audio.duration) audio.currentTime = ratio * audio.duration; });
 const volFill = $('#volFill');
-audio.volume = 0.75;
-dragControl($('#volTrack'), (ratio) => { audio.volume = ratio; volFill.style.width = (ratio * 100) + '%'; });
+dragControl($('#volTrack'), (ratio) => { gainNode.gain.value = ratio; volFill.style.width = (ratio * 100) + '%'; });
 
 function dragControl(track, onSet) {
   const handle = (e) => {
@@ -301,22 +329,37 @@ function roundRect(ctx, x, y, w, h, r) {
 let lyricLines = [];   // {t, text}
 let lyricActive = -1;
 
+function showNoLyrics() {
+  lyricLines = []; lyricActive = -1;
+  $('#lyricsScroll').innerHTML = '<div class="empty">暂无歌词</div>';
+}
+
+function showLyrics(lyric) {
+  lyricLines = parseLRC(lyric);
+  lyricActive = -1;
+  const scroll = $('#lyricsScroll');
+  if (!lyricLines.length) { showNoLyrics(); return; }
+  scroll.innerHTML = '';
+  lyricLines.forEach((line, index) => {
+    const item = document.createElement('div');
+    item.className = 'lr';
+    item.dataset.i = index;
+    item.textContent = line.text;
+    item.onclick = () => { if (audio.duration) audio.currentTime = line.t; };
+    scroll.appendChild(item);
+  });
+}
+
 async function loadLyrics(token) {
   lyricLines = []; lyricActive = -1;
   const scroll = $('#lyricsScroll');
   scroll.innerHTML = '<div class="empty">加载歌词…</div>';
   try {
     const { lyric } = await fetch(`/api/lyric/${token}`).then(r => r.json());
-    lyricLines = parseLRC(lyric);
-    if (!lyricLines.length) { scroll.innerHTML = '<div class="empty">暂无歌词</div>'; return; }
-    scroll.innerHTML = '';
-    lyricLines.forEach((l, i) => {
-      const d = document.createElement('div');
-      d.className = 'lr'; d.dataset.i = i; d.textContent = l.text;
-      d.onclick = () => { if (audio.duration) audio.currentTime = l.t; };
-      scroll.appendChild(d);
-    });
-  } catch { scroll.innerHTML = '<div class="empty">暂无歌词</div>'; }
+    if (currentToken === token) showLyrics(lyric);
+  } catch {
+    if (currentToken === token) scroll.innerHTML = '<div class="empty">暂无歌词</div>';
+  }
 }
 function parseLRC(text) {
   if (!text) return [];
@@ -364,9 +407,77 @@ let dlCount = 0;
 const fab = document.createElement('button');
 fab.className = 'dl-fab'; fab.title = '下载列表';
 fab.innerHTML = `${ICON_DL}<span class="badge">0</span>`;
-fab.onclick = () => { $('#dlDrawer').classList.toggle('open'); $('#lyricsPanel').classList.remove('open'); };
+fab.onclick = () => {
+  $('#dlDrawer').classList.toggle('open');
+  $('#lyricsPanel').classList.remove('open');
+  if ($('#dlDrawer').classList.contains('open')) loadLibrary();
+};
 document.body.appendChild(fab);
 $('#dlClose').onclick = () => $('#dlDrawer').classList.remove('open');
+
+async function loadLibrary() {
+  const list = $('#libraryList');
+  try {
+    const data = await fetch('/api/library').then(r => r.json());
+    $('#downloadDir').textContent = data.directory;
+    libraryQueue.forEach(token => tracks.delete(token));
+    libraryQueue = [];
+    list.innerHTML = '';
+    $('#libraryCount').textContent = data.tracks.length;
+    if (!data.tracks.length) {
+      list.innerHTML = '<li class="dl-empty">暂无已下载歌曲</li>';
+      return;
+    }
+    data.tracks.forEach(t => {
+      tracks.set(t.token, t);
+      libraryQueue.push(t.token);
+      const li = document.createElement('li');
+      li.className = 'library-item' + (currentToken === t.token ? ' playing' : '');
+      li.dataset.token = t.token;
+      li.innerHTML = `
+        <div class="library-meta">
+          <div class="library-name">${esc(t.song_name)}</div>
+          <div class="library-sub">${esc(t.singers) || esc(t.source) || '本地音频'} · ${mb(t.file_size_bytes)}</div>
+        </div>
+        <button type="button" aria-label="播放 ${esc(t.song_name)}">${ICON_PLAY}</button>`;
+      li.querySelector('button').onclick = () => play(t.token, libraryQueue);
+      li.ondblclick = (e) => { if (!e.target.closest('button')) play(t.token, libraryQueue); };
+      list.appendChild(li);
+    });
+  } catch {
+    list.innerHTML = '<li class="dl-empty">读取下载目录失败</li>';
+  }
+}
+
+window.addEventListener('pywebviewready', async () => {
+  const button = $('#chooseDownloadDir');
+  button.hidden = false;
+  try {
+    $('#downloadDir').textContent = await window.pywebview.api.get_download_dir();
+  } catch {}
+});
+$('#chooseDownloadDir').onclick = async () => {
+  try {
+    const path = await window.pywebview.api.choose_download_dir();
+    if (!path) return;
+    if (tracks.get(currentToken)?.local) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      currentToken = null;
+      activeQueue = queue;
+      $('#player').dataset.empty = 'true';
+      $('#npTitle').textContent = '未在播放';
+      $('#npArtist').textContent = '选择一首歌开始';
+      showNoLyrics();
+    }
+    $('#downloadDir').textContent = path;
+    await loadLibrary();
+    toast('下载目录已更新');
+  } catch {
+    toast('无法选择下载目录');
+  }
+};
 
 async function startDownload(token, btn) {
   const t = tracks.get(token);
@@ -411,20 +522,26 @@ function trackDownload(id, item, btn) {
       s.textContent = (d.message || '').slice(0, 24);
       es.close(); if (btn) btn.classList.remove('busy'); return;
     }
+    if (d.status === 'queued') {
+      bar.style.width = '0';
+      prog.textContent = '等待中…';
+      s.textContent = '';
+      return;
+    }
     const total = d.total || 0, done = d.downloaded || 0;
     const pct = total ? Math.min(100, done / total * 100) : 0;
     bar.style.width = (total ? pct : 8) + '%';
     prog.textContent = mb(done) + (total ? ' / ' + mb(total) : '');
     if (d.status === 'downloading' && d.speed) s.textContent = mb(d.speed) + '/s';
     if (d.status === 'done') {
-      item.classList.add('done');
-      bar.style.width = '100%';
-      prog.textContent = mb(d.total || done);
-      s.textContent = '完成';
-      const a = document.createElement('a');
-      a.className = 'dl-save'; a.href = `/api/file/${id}`; a.textContent = '↓ 保存到本地';
-      a.setAttribute('download', '');
-      item.appendChild(a);
+      item.remove();
+      dlCount = Math.max(0, dlCount - 1);
+      fab.querySelector('.badge').textContent = dlCount;
+      if (!dlCount) {
+        fab.classList.remove('has');
+        $('#dlList').innerHTML = '<li class="dl-empty">暂无下载任务</li>';
+      }
+      loadLibrary();
       es.close(); if (btn) btn.classList.remove('busy');
       toast('下载完成：' + (d.name || ''));
     }

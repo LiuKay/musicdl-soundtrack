@@ -1,4 +1,5 @@
 import unittest
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -188,6 +189,181 @@ class SearchCompatibilityTest(unittest.TestCase):
             app._cache_audio(entry, path, 1024)
             self.assertEqual(Path(path).read_bytes(), b'abcdef')
         upstream.raise_for_status.assert_called_once()
+
+    def test_download_copies_complete_cache_without_network(self):
+        token = 'cached-download-test'
+        entry = {
+            'song_info': SimpleNamespace(
+                download_url='https://example.test/audio.mp3',
+                song_name='Cached', singers='Artist', album='Album',
+                ext='mp3', file_size='6 B', file_size_bytes=6,
+                duration='3:00', lyric='[00:01.00]Hello', cover_url='',
+            ),
+            'source': 'MiguMusicClient',
+            'headers': {},
+            'cookies': {},
+        }
+        app.REGISTRY._tracks[token] = entry
+        try:
+            with tempfile.TemporaryDirectory() as root, \
+                    mock.patch.object(app, 'CACHE_DIR', os.path.join(root, 'cache')), \
+                    mock.patch.object(app, 'DOWNLOAD_DIR', os.path.join(root, 'downloads')), \
+                    mock.patch.object(app.requests, 'get') as get:
+                os.makedirs(app.CACHE_DIR)
+                Path(app._cache_path(entry)).write_bytes(b'abcdef')
+                app.run_download('cached-download', token)
+                record = app._get_dl('cached-download')
+                self.assertEqual(Path(record['path']).read_bytes(), b'abcdef')
+                metadata = json.loads(Path(record['path'] + '.soundtrack.json').read_text())
+                self.assertNotIn('lyric', metadata)
+                self.assertEqual(
+                    Path(record['path']).with_suffix('.lrc').read_text().strip(),
+                    '[00:01.00]Hello',
+                )
+                get.assert_not_called()
+        finally:
+            app.REGISTRY._tracks.pop(token, None)
+            app.DOWNLOADS.pop('cached-download', None)
+
+        self.assertEqual(record['status'], 'done')
+        self.assertEqual(record['downloaded'], 6)
+
+    def test_download_queue_respects_live_concurrency_limit(self):
+        started = []
+
+        class Thread:
+            def __init__(self, target, args, daemon):
+                self.target, self.args = target, args
+
+            def start(self):
+                started.append(self)
+
+        old_limit = app.DOWNLOAD_CONCURRENCY
+        try:
+            app.DOWNLOAD_CONCURRENCY = 1
+            app.DOWNLOAD_ACTIVE = 0
+            app.DOWNLOAD_PENDING.clear()
+            with mock.patch.object(app.threading, 'Thread', Thread), \
+                    mock.patch.object(app, 'run_download'):
+                app._enqueue_download('first', 'token-1')
+                app._enqueue_download('second', 'token-2')
+                self.assertEqual([thread.args[0] for thread in started], ['first'])
+                self.assertEqual(app._get_dl('second')['status'], 'queued')
+
+                response = app.app.test_client().post(
+                    '/api/download/concurrency', json={'concurrency': 2},
+                )
+                self.assertEqual(response.get_json(), {'concurrency': 2})
+                self.assertEqual(
+                    [thread.args[0] for thread in started],
+                    ['first', 'second'],
+                )
+                app._set_download_concurrency(1)
+                app._enqueue_download('third', 'token-3')
+                started[0].target(*started[0].args)
+                self.assertEqual(len(started), 2)
+                started[1].target(*started[1].args)
+                self.assertEqual(
+                    [thread.args[0] for thread in started],
+                    ['first', 'second', 'third'],
+                )
+                invalid = app.app.test_client().post(
+                    '/api/download/concurrency', json={'concurrency': 1.5},
+                )
+                self.assertEqual(invalid.status_code, 400)
+        finally:
+            app.DOWNLOAD_CONCURRENCY = old_limit
+            app.DOWNLOAD_ACTIVE = 0
+            app.DOWNLOAD_PENDING.clear()
+            app.DOWNLOADS.pop('first', None)
+            app.DOWNLOADS.pop('second', None)
+            app.DOWNLOADS.pop('third', None)
+
+    def test_download_metadata_saves_raster_cover(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {'Content-Type': 'image/jpeg'}
+        response.iter_content.return_value = [b'cover']
+        song = SimpleNamespace(
+            song_name='Song', singers='Singer', album='Album', duration='3:00',
+            lyric='[00:01.00]Hello', cover_url='https://example.test/cover.jpg',
+        )
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(app, 'DOWNLOAD_DIR', root), \
+                mock.patch.object(app.requests, 'get', return_value=response), \
+                mock.patch.object(
+                    app.SongInfoUtils, 'savelyricsthenwritetagstoaudio',
+                ) as write_tags:
+            audio = os.path.join(root, 'song.mp3')
+            Path(audio).write_bytes(b'audio')
+            app._save_download_metadata(audio, {
+                'song_info': song, 'headers': {}, 'cookies': {},
+            })
+
+            cover_path = Path(audio + '.soundtrack.cover.jpg')
+            self.assertEqual(cover_path.read_bytes(), b'cover')
+            tag_song = write_tags.call_args.args[0]
+            self.assertEqual(tag_song.save_path, audio)
+            self.assertEqual(Path(tag_song.cover_url), cover_path.resolve())
+            self.assertTrue(cover_path.exists())
+            response.iter_content.return_value = [b'x' * (5 * 1024 * 1024 + 1)]
+            app._save_download_metadata(audio, {
+                'song_info': song, 'headers': {}, 'cookies': {},
+            })
+            self.assertFalse(cover_path.exists())
+
+    def test_library_lists_and_range_streams_only_local_audio(self):
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(app, 'DOWNLOAD_DIR', root):
+            source = Path(root) / 'Migu'
+            source.mkdir()
+            audio = source / 'Song - Singer.mp3'
+            audio.write_bytes(b'0123456789')
+            Path(str(audio) + '.soundtrack.json').write_text(json.dumps({
+                'song_name': 'Metadata Song',
+                'singers': 'Metadata Singer',
+                'album': 'Metadata Album',
+                'duration': '3:00',
+                'cover_mime': 'image/jpeg',
+            }))
+            Path(str(audio) + '.soundtrack.cover').write_bytes(b'cover')
+            audio.with_suffix('.lrc').write_text('[00:01.00]Hello')
+            (source / 'partial.mp3.part').write_bytes(b'partial')
+            (source / 'notes.txt').write_text('not audio')
+
+            client = app.app.test_client()
+            library = client.get('/api/library').get_json()
+            self.assertEqual(len(library['tracks']), 1)
+            self.assertEqual(
+                (library['tracks'][0]['song_name'], library['tracks'][0]['singers']),
+                ('Metadata Song', 'Metadata Singer'),
+            )
+            self.assertEqual(library['tracks'][0]['lyric'], '[00:01.00]Hello')
+            cover = client.get(library['tracks'][0]['cover_url'])
+            cover_body = cover.data
+            cover_nosniff = cover.headers['X-Content-Type-Options']
+            cover.close()
+            response = client.get(
+                library['tracks'][0]['stream_url'],
+                headers={'Range': 'bytes=3-6'},
+            )
+            body = response.data
+            response.close()
+
+            with app.app.test_request_context():
+                escaped = app.api_library_file('../outside.mp3')
+
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(body, b'3456')
+        self.assertEqual(cover_body, b'cover')
+        self.assertEqual(cover_nosniff, 'nosniff')
+        self.assertEqual(escaped[1], 404)
+
+    def test_player_uses_web_audio_gain_for_volume(self):
+        script = Path('static/app.js').read_text()
+
+        self.assertIn('audioCtx.createGain()', script)
+        self.assertNotIn('audio.volume = ratio', script)
 
     def test_lyric_endpoint_preserves_registered_song_lyric(self):
         token = 'lyric-compatibility-test'

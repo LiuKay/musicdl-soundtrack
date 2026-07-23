@@ -19,14 +19,19 @@ import uuid
 import json
 import queue
 import hashlib
+import shutil
 import threading
 import requests
+from collections import deque
+from copy import copy
+from pathlib import Path
 from flask import (
     Flask, request, Response, jsonify, send_file, send_from_directory,
-    stream_with_context,
+    stream_with_context, url_for,
 )
 
 from musicdl import musicdl
+from musicdl.modules import SongInfoUtils
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +69,11 @@ RESULT_EXT_TO_MIME = {
     'mp3': 'audio/mpeg', 'flac': 'audio/flac', 'wav': 'audio/wav',
     'm4a': 'audio/mp4', 'aac': 'audio/aac', 'ape': 'audio/x-ape', 'ogg': 'audio/ogg',
 }
+COVER_MIME_SUFFIXES = {
+    'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp',
+    'image/gif': '.gif', 'image/avif': '.avif',
+}
+COVER_MIME_TYPES = set(COVER_MIME_SUFFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +381,10 @@ def _drain(buckets, cursors, source, seen, lock, emit):
 # ---------------------------------------------------------------------------
 DOWNLOADS = {}
 DL_LOCK = threading.Lock()
+DOWNLOAD_CONCURRENCY = 3
+DOWNLOAD_ACTIVE = 0
+DOWNLOAD_PENDING = deque()
+DOWNLOAD_QUEUE_LOCK = threading.Lock()
 
 
 def _safe_name(name):
@@ -398,24 +412,160 @@ def _parse_byte_range(value, total_size):
         return None
 
 
+def _save_download_metadata(path, entry):
+    song = entry['song_info']
+    metadata = {
+        'song_name': str(getattr(song, 'song_name', '') or ''),
+        'singers': str(getattr(song, 'singers', '') or ''),
+        'album': str(getattr(song, 'album', '') or ''),
+        'duration': str(getattr(song, 'duration', '') or ''),
+    }
+    for suffix in ('', *COVER_MIME_SUFFIXES.values()):
+        try:
+            os.remove(path + '.soundtrack.cover' + suffix)
+        except OSError:
+            pass
+    cover_url = getattr(song, 'cover_url', None)
+    if isinstance(cover_url, str) and cover_url.startswith('http'):
+        try:
+            with requests.get(
+                    cover_url,
+                    headers={'User-Agent': entry['headers'].get('User-Agent', 'Mozilla/5.0')},
+                    timeout=(10, 20),
+                    verify=False) as response:
+                response.raise_for_status()
+                cover_mime = response.headers.get('Content-Type', '').split(';', 1)[0].lower()
+                if cover_mime in COVER_MIME_TYPES:
+                    cover_path = path + '.soundtrack.cover' + COVER_MIME_SUFFIXES[cover_mime]
+                    cover_tmp = cover_path + '.part'
+                    size = 0
+                    with open(cover_tmp, 'wb') as fp:
+                        for chunk in response.iter_content(chunk_size=64 * 1024):
+                            size += len(chunk)
+                            if size > 5 * 1024 * 1024:
+                                break
+                            fp.write(chunk)
+                    if size <= 5 * 1024 * 1024:
+                        os.replace(cover_tmp, cover_path)
+                        metadata['cover_mime'] = cover_mime
+                    else:
+                        os.remove(cover_tmp)
+        except (OSError, requests.RequestException):
+            pass
+    metadata_tmp = path + '.soundtrack.json.part'
+    try:
+        with open(metadata_tmp, 'w', encoding='utf-8') as fp:
+            json.dump(metadata, fp, ensure_ascii=False)
+        os.replace(metadata_tmp, path + '.soundtrack.json')
+    except OSError:
+        try:
+            os.remove(metadata_tmp)
+        except OSError:
+            pass
+    try:
+        SongInfoUtils.savelrctofile(
+            Path(path), str(getattr(song, 'lyric', '') or ''), overwrite=True,
+        )
+    except Exception:
+        pass
+    try:
+        tag_song = copy(song)
+        tag_song.save_path = path
+        tag_song.cover_url = _existing_download_cover(path, metadata) or ''
+        SongInfoUtils.savelyricsthenwritetagstoaudio(
+            tag_song, overwrite=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+
+def _existing_sidecar(path, suffix):
+    root = os.path.realpath(DOWNLOAD_DIR)
+    sidecar = os.path.realpath(path + suffix)
+    try:
+        if os.path.commonpath((root, sidecar)) == root and os.path.isfile(sidecar):
+            return sidecar
+    except ValueError:
+        pass
+    return None
+
+
+def _existing_download_cover(path, metadata):
+    suffix = COVER_MIME_SUFFIXES.get(metadata.get('cover_mime'))
+    if suffix:
+        cover = _existing_sidecar(path, '.soundtrack.cover' + suffix)
+        if cover:
+            return cover
+    return _existing_sidecar(path, '.soundtrack.cover')
+
+
+def _read_download_metadata(path):
+    metadata_path = _existing_sidecar(path, '.soundtrack.json')
+    if not metadata_path:
+        return {}
+    try:
+        with open(metadata_path, encoding='utf-8') as fp:
+            metadata = json.load(fp)
+        if not isinstance(metadata, dict):
+            return {}
+        return {key: value for key, value in metadata.items() if isinstance(value, str)}
+    except (OSError, ValueError):
+        return {}
+
+
+def _read_download_lyric(path):
+    root = os.path.realpath(DOWNLOAD_DIR)
+    lyric_path = os.path.realpath(str(Path(path).with_suffix('.lrc')))
+    try:
+        if os.path.commonpath((root, lyric_path)) != root or not os.path.isfile(lyric_path):
+            return ''
+        with open(lyric_path, encoding='utf-8') as fp:
+            lyric = fp.read(2 * 1024 * 1024 + 1)
+        return lyric if len(lyric) <= 2 * 1024 * 1024 else ''
+    except (OSError, UnicodeError, ValueError):
+        return ''
+
+
 def run_download(download_id, token):
     entry = REGISTRY.get(token)
     if not entry:
         _set_dl(download_id, status='error', message='曲目已过期，请重新搜索')
         return
     song = entry['song_info']
-    url = getattr(song, 'download_url', None)
-    if not isinstance(url, str) or not url.startswith('http'):
-        _set_dl(download_id, status='error', message='该曲目没有可用的下载地址')
-        return
-
     source = entry['source']
     sub = os.path.join(DOWNLOAD_DIR, SUPPORTED_SOURCES.get(source, {}).get('short', source))
     os.makedirs(sub, exist_ok=True)
     ext = (str(song.ext) or 'mp3').lstrip('.')
     fname = f"{_safe_name(str(song.song_name))} - {_safe_name(str(song.singers))}.{ext}"
     path = os.path.join(sub, fname)
+    tmp = path + '.part'
 
+    cached_total = None
+    try:
+        cached = _cache_path(entry)
+        with CACHE_LOCK:
+            if os.path.isfile(cached):
+                cached_total = os.path.getsize(cached)
+                _set_dl(download_id, status='downloading', total=cached_total, downloaded=0,
+                        name=fname, path=path)
+                shutil.copy2(cached, tmp)
+                os.utime(cached)
+                os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if cached_total is not None:
+        _save_download_metadata(path, entry)
+        _set_dl(download_id, status='done', downloaded=cached_total,
+                total=cached_total, speed=0, name=fname, path=path)
+        return
+
+    url = getattr(song, 'download_url', None)
+    if not isinstance(url, str) or not url.startswith('http'):
+        _set_dl(download_id, status='error', message='该曲目没有可用的下载地址')
+        return
     try:
         with requests.get(url, headers=entry['headers'], cookies=entry['cookies'],
                           stream=True, timeout=(10, 30), verify=False) as resp:
@@ -428,7 +578,6 @@ def run_download(download_id, token):
             done = 0
             last = time.time()
             last_bytes = 0
-            tmp = path + '.part'
             with open(tmp, 'wb') as fp:
                 for chunk in resp.iter_content(chunk_size=256 * 1024):
                     if not chunk:
@@ -441,6 +590,7 @@ def run_download(download_id, token):
                         _set_dl(download_id, downloaded=done, total=total, speed=speed)
                         last, last_bytes = now, done
             os.replace(tmp, path)
+            _save_download_metadata(path, entry)
             _set_dl(download_id, status='done', downloaded=done,
                     total=total or done, speed=0, name=fname, path=path)
     except Exception as err:
@@ -457,6 +607,99 @@ def _set_dl(download_id, **fields):
 def _get_dl(download_id):
     with DL_LOCK:
         return dict(DOWNLOADS.get(download_id, {}))
+
+
+def _run_download_job(download_id, token):
+    global DOWNLOAD_ACTIVE
+    try:
+        run_download(download_id, token)
+    finally:
+        with DOWNLOAD_QUEUE_LOCK:
+            DOWNLOAD_ACTIVE -= 1
+        _drain_download_queue()
+
+
+def _drain_download_queue():
+    global DOWNLOAD_ACTIVE
+    while True:
+        with DOWNLOAD_QUEUE_LOCK:
+            if DOWNLOAD_ACTIVE >= DOWNLOAD_CONCURRENCY or not DOWNLOAD_PENDING:
+                return
+            download_id, token = DOWNLOAD_PENDING.popleft()
+            DOWNLOAD_ACTIVE += 1
+        thread = threading.Thread(
+            target=_run_download_job,
+            args=(download_id, token),
+            daemon=True,
+        )
+        try:
+            thread.start()
+        except RuntimeError as err:
+            with DOWNLOAD_QUEUE_LOCK:
+                DOWNLOAD_ACTIVE -= 1
+            _set_dl(download_id, status='error', message=str(err))
+
+
+def _enqueue_download(download_id, token):
+    # ponytail: one in-memory FIFO; persist it only if resumable downloads are added.
+    _set_dl(download_id, status='queued', downloaded=0, total=0)
+    with DOWNLOAD_QUEUE_LOCK:
+        DOWNLOAD_PENDING.append((download_id, token))
+    _drain_download_queue()
+
+
+def _set_download_concurrency(value):
+    global DOWNLOAD_CONCURRENCY
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError
+    if not 1 <= value <= 5:
+        raise ValueError
+    with DOWNLOAD_QUEUE_LOCK:
+        DOWNLOAD_CONCURRENCY = value
+    _drain_download_queue()
+    return value
+
+
+def _library_tracks():
+    root = os.path.abspath(DOWNLOAD_DIR)
+    tracks = []
+    if not os.path.isdir(root):
+        return tracks
+    # ponytail: scan on drawer open; add an index only if large libraries make this slow.
+    for directory, subdirs, files in os.walk(root):
+        subdirs[:] = [name for name in subdirs if not name.startswith('.')]
+        for name in files:
+            ext = os.path.splitext(name)[1].lower().lstrip('.')
+            if name.startswith('.') or ext not in RESULT_EXT_TO_MIME:
+                continue
+            path = os.path.join(directory, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            relative = os.path.relpath(path, root).replace(os.sep, '/')
+            stem = os.path.splitext(name)[0]
+            song_name, separator, singers = stem.rpartition(' - ')
+            if not separator:
+                song_name, singers = stem, ''
+            source = relative.split('/', 1)[0] if '/' in relative else ''
+            metadata = _read_download_metadata(path)
+            tracks.append({
+                'token': 'local-' + hashlib.sha256(relative.encode()).hexdigest()[:16],
+                'song_name': metadata.get('song_name') or song_name,
+                'singers': metadata.get('singers') or singers,
+                'album': metadata.get('album', ''),
+                'duration': metadata.get('duration', ''),
+                'lyric': _read_download_lyric(path) or metadata.get('lyric', ''),
+                'source': source,
+                'ext': ext,
+                'file_size_bytes': stat.st_size,
+                'modified': stat.st_mtime,
+                'relative': relative,
+                'has_cover': bool(_existing_download_cover(path, metadata)),
+                'local': True,
+            })
+    return sorted(tracks, key=lambda track: track['modified'], reverse=True)
 
 
 # ---------------------------------------------------------------------------
@@ -621,10 +864,21 @@ def api_download():
     if not entry:
         return jsonify({'error': '曲目已过期，请重新搜索'}), 404
     download_id = uuid.uuid4().hex[:16]
-    _set_dl(download_id, status='starting', downloaded=0, total=0,
-            name=str(entry['song_info'].song_name))
-    threading.Thread(target=run_download, args=(download_id, token), daemon=True).start()
+    _set_dl(download_id, name=str(entry['song_info'].song_name))
+    _enqueue_download(download_id, token)
     return jsonify({'download_id': download_id})
+
+
+@app.route('/api/download/concurrency', methods=['GET', 'POST'])
+def api_download_concurrency():
+    if request.method == 'GET':
+        return jsonify({'concurrency': DOWNLOAD_CONCURRENCY})
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        concurrency = _set_download_concurrency(data.get('concurrency'))
+    except (TypeError, ValueError):
+        return jsonify({'error': '同时下载数必须是 1–5'}), 400
+    return jsonify({'concurrency': concurrency})
 
 
 @app.route('/api/download/<download_id>/progress')
@@ -653,6 +907,69 @@ def api_file(download_id):
         return 'not ready', 404
     path = rec['path']
     return send_from_directory(os.path.dirname(path), os.path.basename(path), as_attachment=True)
+
+
+@app.route('/api/library')
+def api_library():
+    tracks = _library_tracks()
+    for track in tracks:
+        relative = track.pop('relative')
+        track['stream_url'] = url_for('api_library_file', relative=relative)
+        track['cover_url'] = (
+            url_for('api_library_cover', relative=relative)
+            if track.pop('has_cover') else ''
+        )
+    directory = os.path.abspath(DOWNLOAD_DIR)
+    home = os.path.expanduser('~')
+    if directory == home or directory.startswith(home + os.sep):
+        directory = '~' + directory[len(home):]
+    return jsonify({
+        'directory': directory,
+        'tracks': tracks,
+    })
+
+
+@app.route('/api/library/file/<path:relative>')
+def api_library_file(relative):
+    ext = os.path.splitext(relative)[1].lower().lstrip('.')
+    if ext not in RESULT_EXT_TO_MIME:
+        return '', 404
+    root = os.path.realpath(DOWNLOAD_DIR)
+    path = os.path.realpath(os.path.join(root, relative))
+    try:
+        if os.path.commonpath((root, path)) != root or not os.path.isfile(path):
+            return '', 404
+    except ValueError:
+        return '', 404
+    return send_file(
+        path, conditional=True,
+        mimetype=RESULT_EXT_TO_MIME.get(ext, 'application/octet-stream'),
+    )
+
+
+@app.route('/api/library/cover/<path:relative>')
+def api_library_cover(relative):
+    ext = os.path.splitext(relative)[1].lower().lstrip('.')
+    if ext not in RESULT_EXT_TO_MIME:
+        return '', 404
+    root = os.path.realpath(DOWNLOAD_DIR)
+    audio_path = os.path.realpath(os.path.join(root, relative))
+    metadata = _read_download_metadata(audio_path)
+    cover_path = _existing_download_cover(audio_path, metadata)
+    try:
+        if os.path.commonpath((root, audio_path)) != root or not cover_path:
+            return '', 404
+    except ValueError:
+        return '', 404
+    cover_mime = metadata.get('cover_mime', 'image/jpeg')
+    if cover_mime not in COVER_MIME_TYPES:
+        cover_mime = 'image/jpeg'
+    response = send_file(
+        cover_path,
+        mimetype=cover_mime,
+    )
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 
 if __name__ == '__main__':
