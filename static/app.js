@@ -11,6 +11,14 @@ let currentToken = null;
 let searchES = null;
 let sources = [];
 
+const cacheToggle = $('#cacheToggle');
+const cacheLimit = $('#cacheLimit');
+const savedCacheLimit = localStorage.getItem('soundtrack-cache-limit');
+cacheToggle.checked = localStorage.getItem('soundtrack-cache-enabled') === '1';
+if ([...cacheLimit.options].some(o => o.value === savedCacheLimit)) cacheLimit.value = savedCacheLimit;
+cacheToggle.onchange = () => localStorage.setItem('soundtrack-cache-enabled', cacheToggle.checked ? '1' : '0');
+cacheLimit.onchange = () => localStorage.setItem('soundtrack-cache-limit', cacheLimit.value);
+
 /* ------------------------------------------------------------------ */
 /* sources / chips                                                     */
 /* ------------------------------------------------------------------ */
@@ -169,7 +177,10 @@ function play(token) {
   ensureAudioGraph();
   if (audioCtx.state === 'suspended') audioCtx.resume();
 
-  audio.src = `/api/stream/${token}`;
+  const cacheQuery = cacheToggle.checked
+    ? `?cache=1&cache_max_mb=${cacheLimit.value}`
+    : '';
+  audio.src = `/api/stream/${token}${cacheQuery}`;
   audio.play().catch(() => toast('无法播放该曲目'));
 
   // now-playing meta
