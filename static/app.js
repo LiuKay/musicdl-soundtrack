@@ -439,14 +439,41 @@ async function loadLibrary() {
           <div class="library-name">${esc(t.song_name)}</div>
           <div class="library-sub">${esc(t.singers) || esc(t.source) || '本地音频'} · ${mb(t.file_size_bytes)}</div>
         </div>
-        <button type="button" aria-label="播放 ${esc(t.song_name)}">${ICON_PLAY}</button>`;
-      li.querySelector('button').onclick = () => play(t.token, libraryQueue);
+        <button class="library-play" type="button" aria-label="播放 ${esc(t.song_name)}">${ICON_PLAY}</button>
+        <button class="library-delete" type="button" aria-label="删除 ${esc(t.song_name)}">删除</button>`;
+      li.querySelector('.library-play').onclick = () => play(t.token, libraryQueue);
+      li.querySelector('.library-delete').onclick = async (e) => {
+        if (!confirm(`删除“${t.song_name}”及其本地文件？`)) return;
+        e.currentTarget.disabled = true;
+        try {
+          const response = await fetch(t.delete_url, { method: 'DELETE' });
+          if (!response.ok) throw new Error();
+          if (currentToken === t.token) clearLocalPlayback();
+          await loadLibrary();
+          toast('已删除：' + t.song_name);
+        } catch {
+          e.currentTarget.disabled = false;
+          toast('删除失败');
+        }
+      };
       li.ondblclick = (e) => { if (!e.target.closest('button')) play(t.token, libraryQueue); };
       list.appendChild(li);
     });
   } catch {
     list.innerHTML = '<li class="dl-empty">读取下载目录失败</li>';
   }
+}
+
+function clearLocalPlayback() {
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+  currentToken = null;
+  activeQueue = queue;
+  $('#player').dataset.empty = 'true';
+  $('#npTitle').textContent = '未在播放';
+  $('#npArtist').textContent = '选择一首歌开始';
+  showNoLyrics();
 }
 
 window.addEventListener('pywebviewready', async () => {
@@ -460,17 +487,7 @@ $('#chooseDownloadDir').onclick = async () => {
   try {
     const path = await window.pywebview.api.choose_download_dir();
     if (!path) return;
-    if (tracks.get(currentToken)?.local) {
-      audio.pause();
-      audio.removeAttribute('src');
-      audio.load();
-      currentToken = null;
-      activeQueue = queue;
-      $('#player').dataset.empty = 'true';
-      $('#npTitle').textContent = '未在播放';
-      $('#npArtist').textContent = '选择一首歌开始';
-      showNoLyrics();
-    }
+    if (tracks.get(currentToken)?.local) clearLocalPlayback();
     $('#downloadDir').textContent = path;
     await loadLibrary();
     toast('下载目录已更新');
@@ -502,7 +519,10 @@ function addDlItem(t) {
   const li = document.createElement('li');
   li.className = 'dl-item';
   li.innerHTML = `
-    <div class="dl-name">${esc(t.song_name)} · ${esc(t.singers)}</div>
+    <div class="dl-top">
+      <div class="dl-name">${esc(t.song_name)} · ${esc(t.singers)}</div>
+      <button class="dl-delete" type="button" aria-label="删除 ${esc(t.song_name)} 下载任务">删除</button>
+    </div>
     <div class="dl-bar"><i></i></div>
     <div class="dl-stat"><span class="prog">准备中…</span><span class="s"></span></div>`;
   list.prepend(li);
@@ -510,8 +530,34 @@ function addDlItem(t) {
   return li;
 }
 
+function removeDlItem(item) {
+  if (!item.isConnected) return;
+  item.remove();
+  dlCount = Math.max(0, dlCount - 1);
+  fab.querySelector('.badge').textContent = dlCount;
+  if (!dlCount) {
+    fab.classList.remove('has');
+    $('#dlList').innerHTML = '<li class="dl-empty">暂无下载任务</li>';
+  }
+}
+
 function trackDownload(id, item, btn) {
   const es = new EventSource(`/api/download/${id}/progress`);
+  item.querySelector('.dl-delete').onclick = async (e) => {
+    if (!confirm('删除这个下载任务并清理临时文件？')) return;
+    e.currentTarget.disabled = true;
+    try {
+      const response = await fetch(`/api/download/${id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error();
+      es.close();
+      removeDlItem(item);
+      if (btn) btn.classList.remove('busy');
+      toast('下载任务已删除');
+    } catch {
+      e.currentTarget.disabled = false;
+      toast('删除失败');
+    }
+  };
   es.addEventListener('progress', (ev) => {
     const d = JSON.parse(ev.data);
     const bar = item.querySelector('.dl-bar i');
@@ -534,13 +580,7 @@ function trackDownload(id, item, btn) {
     prog.textContent = mb(done) + (total ? ' / ' + mb(total) : '');
     if (d.status === 'downloading' && d.speed) s.textContent = mb(d.speed) + '/s';
     if (d.status === 'done') {
-      item.remove();
-      dlCount = Math.max(0, dlCount - 1);
-      fab.querySelector('.badge').textContent = dlCount;
-      if (!dlCount) {
-        fab.classList.remove('has');
-        $('#dlList').innerHTML = '<li class="dl-empty">暂无下载任务</li>';
-      }
+      removeDlItem(item);
       loadLibrary();
       es.close(); if (btn) btn.classList.remove('busy');
       toast('下载完成：' + (d.name || ''));
