@@ -380,6 +380,7 @@ def _drain(buckets, cursors, source, seen, lock, emit):
 # downloads: chunked, with live progress, using the musicdl-resolved URL
 # ---------------------------------------------------------------------------
 DOWNLOADS = {}
+DOWNLOAD_CANCELLED = set()
 DL_LOCK = threading.Lock()
 DOWNLOAD_CONCURRENCY = 3
 DOWNLOAD_ACTIVE = 0
@@ -533,12 +534,16 @@ def run_download(download_id, token):
         return
     song = entry['song_info']
     source = entry['source']
-    sub = os.path.join(DOWNLOAD_DIR, SUPPORTED_SOURCES.get(source, {}).get('short', source))
+    download_root = os.path.realpath(DOWNLOAD_DIR)
+    sub = os.path.join(download_root, SUPPORTED_SOURCES.get(source, {}).get('short', source))
     os.makedirs(sub, exist_ok=True)
     ext = (str(song.ext) or 'mp3').lstrip('.')
     fname = f"{_safe_name(str(song.song_name))} - {_safe_name(str(song.singers))}.{ext}"
     path = os.path.join(sub, fname)
-    tmp = path + '.part'
+    tmp = path + f'.{download_id}.part'
+    _set_dl(download_id, name=fname, path=path, tmp_path=tmp,
+            download_root=download_root, published=False)
+    _check_download_cancelled(download_id)
 
     cached_total = None
     try:
@@ -549,19 +554,25 @@ def run_download(download_id, token):
                 _set_dl(download_id, status='downloading', total=cached_total, downloaded=0,
                         name=fname, path=path)
                 shutil.copy2(cached, tmp)
+                _check_download_cancelled(download_id)
                 os.utime(cached)
-                os.replace(tmp, path)
+                _publish_download(download_id, tmp, path)
+    except InterruptedError:
+        raise
     except OSError:
+        cached_total = None
         try:
             os.remove(tmp)
         except OSError:
             pass
     if cached_total is not None:
         _save_download_metadata(path, entry)
+        _check_download_cancelled(download_id)
         _set_dl(download_id, status='done', downloaded=cached_total,
                 total=cached_total, speed=0, name=fname, path=path)
         return
 
+    _check_download_cancelled(download_id)
     url = getattr(song, 'download_url', None)
     if not isinstance(url, str) or not url.startswith('http'):
         _set_dl(download_id, status='error', message='该曲目没有可用的下载地址')
@@ -580,6 +591,7 @@ def run_download(download_id, token):
             last_bytes = 0
             with open(tmp, 'wb') as fp:
                 for chunk in resp.iter_content(chunk_size=256 * 1024):
+                    _check_download_cancelled(download_id)
                     if not chunk:
                         continue
                     fp.write(chunk)
@@ -589,10 +601,14 @@ def run_download(download_id, token):
                         speed = (done - last_bytes) / (now - last)
                         _set_dl(download_id, downloaded=done, total=total, speed=speed)
                         last, last_bytes = now, done
-            os.replace(tmp, path)
+            _check_download_cancelled(download_id)
+            _publish_download(download_id, tmp, path)
             _save_download_metadata(path, entry)
+            _check_download_cancelled(download_id)
             _set_dl(download_id, status='done', downloaded=done,
                     total=total or done, speed=0, name=fname, path=path)
+    except InterruptedError:
+        pass
     except Exception as err:
         _set_dl(download_id, status='error', message=str(err))
 
@@ -600,6 +616,11 @@ def run_download(download_id, token):
 def _set_dl(download_id, **fields):
     with DL_LOCK:
         rec = DOWNLOADS.setdefault(download_id, {})
+        if download_id in DOWNLOAD_CANCELLED:
+            for key in ('path', 'tmp_path', 'download_root'):
+                if fields.get(key):
+                    rec[key] = fields[key]
+            return
         rec.update(fields)
         rec['updated'] = time.time()
 
@@ -609,11 +630,120 @@ def _get_dl(download_id):
         return dict(DOWNLOADS.get(download_id, {}))
 
 
+def _check_download_cancelled(download_id):
+    with DL_LOCK:
+        if download_id in DOWNLOAD_CANCELLED:
+            raise InterruptedError
+
+
+def _publish_download(download_id, tmp, path):
+    with DL_LOCK:
+        if download_id in DOWNLOAD_CANCELLED:
+            raise InterruptedError
+        rec = DOWNLOADS[download_id]
+        rec['replaced_existing'] = os.path.exists(path)
+        os.replace(tmp, path)
+        rec['published'] = True
+
+
+def _delete_download_files(path, tmp_path=None, include_audio=True, root=None):
+    if not path:
+        return True
+    root = os.path.realpath(root or DOWNLOAD_DIR)
+    path = os.path.realpath(path)
+    try:
+        if os.path.commonpath((root, path)) != root:
+            return False
+    except ValueError:
+        return False
+    files = [tmp_path or path + '.part']
+    if include_audio:
+        files.extend([
+            path, path + '.part', path + '.soundtrack.json',
+            path + '.soundtrack.json.part', str(Path(path).with_suffix('.lrc')),
+        ])
+        for suffix in ('', *COVER_MIME_SUFFIXES.values()):
+            files.extend((path + '.soundtrack.cover' + suffix,
+                          path + '.soundtrack.cover' + suffix + '.part'))
+    cleaned = True
+    for filename in files:
+        try:
+            os.remove(filename)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            cleaned = False
+    return cleaned
+
+
+def _cancel_download(download_id):
+    with DL_LOCK:
+        rec = DOWNLOADS.get(download_id)
+        if not rec:
+            return False
+        status = rec.get('status')
+        path = rec.get('path')
+        tmp_path = rec.get('tmp_path')
+        root = rec.get('download_root')
+        DOWNLOAD_CANCELLED.add(download_id)
+        rec['status'] = 'cancelling'
+        rec['updated'] = time.time()
+    with DOWNLOAD_QUEUE_LOCK:
+        pending = len(DOWNLOAD_PENDING)
+        remaining = [job for job in DOWNLOAD_PENDING if job[0] != download_id]
+        DOWNLOAD_PENDING.clear()
+        DOWNLOAD_PENDING.extend(remaining)
+        removed = len(DOWNLOAD_PENDING) != pending
+    active = not removed and status not in ('done', 'error', 'cancelled')
+    if not active:
+        with DL_LOCK:
+            rec['status'] = 'cancelled'
+    if removed or status in ('done', 'error'):
+        cleaned = _delete_download_files(
+            path, tmp_path, include_audio=False, root=root,
+        )
+        if not cleaned:
+            with DL_LOCK:
+                DOWNLOAD_CANCELLED.discard(download_id)
+                rec['status'] = 'error'
+                rec['message'] = '无法清理下载临时文件'
+            return None
+        with DL_LOCK:
+            DOWNLOADS.pop(download_id, None)
+            DOWNLOAD_CANCELLED.discard(download_id)
+    return 'pending' if active else True
+
+
 def _run_download_job(download_id, token):
     global DOWNLOAD_ACTIVE
     try:
         run_download(download_id, token)
     finally:
+        with DL_LOCK:
+            cancelled = download_id in DOWNLOAD_CANCELLED
+            rec = DOWNLOADS.get(download_id, {})
+            path, tmp_path = rec.get('path'), rec.get('tmp_path')
+            root = rec.get('download_root')
+            include_audio = bool(
+                rec.get('published') and not rec.get('replaced_existing') and
+                not any(
+                    other_id != download_id and
+                    other.get('path') == path and other.get('published')
+                    for other_id, other in DOWNLOADS.items()
+                )
+            )
+        if cancelled:
+            cleaned = _delete_download_files(
+                path, tmp_path, include_audio=include_audio, root=root,
+            )
+            with DL_LOCK:
+                DOWNLOAD_CANCELLED.discard(download_id)
+                rec = DOWNLOADS.get(download_id)
+                if rec is not None:
+                    rec['status'] = 'cancelled' if cleaned else 'error'
+                    rec['updated'] = time.time()
+                    if not cleaned:
+                        rec['message'] = '下载已停止，但无法清理本地文件'
         with DOWNLOAD_QUEUE_LOCK:
             DOWNLOAD_ACTIVE -= 1
         _drain_download_queue()
@@ -707,6 +837,14 @@ def _library_tracks():
 # ---------------------------------------------------------------------------
 app = Flask(__name__, static_folder=None)
 requests.packages.urllib3.disable_warnings()
+
+
+@app.before_request
+def require_local_host():
+    host = request.host.lower()
+    hostname = host[1:].split(']', 1)[0] if host.startswith('[') else host.split(':', 1)[0]
+    if hostname not in {'127.0.0.1', 'localhost', '::1'}:
+        return '', 403
 
 
 @app.route('/')
@@ -892,12 +1030,24 @@ def api_download_progress(download_id):
                 yield 'event: error\ndata: {"message":"unknown download"}\n\n'
                 return
             yield f'event: progress\ndata: {json.dumps(rec, ensure_ascii=False)}\n\n'
-            if rec.get('status') in ('done', 'error'):
+            if rec.get('status') in ('done', 'error', 'cancelled'):
                 return
             time.sleep(0.3)
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/download/<download_id>', methods=['DELETE'])
+def api_delete_download(download_id):
+    cancelled = _cancel_download(download_id)
+    if cancelled is False:
+        return jsonify({'error': '下载任务不存在'}), 404
+    if cancelled is None:
+        return jsonify({'error': '无法清理下载临时文件'}), 409
+    if cancelled == 'pending':
+        return '', 202
+    return '', 204
 
 
 @app.route('/api/file/<download_id>')
@@ -913,8 +1063,9 @@ def api_file(download_id):
 def api_library():
     tracks = _library_tracks()
     for track in tracks:
-        relative = track.pop('relative')
+        relative = track['relative']
         track['stream_url'] = url_for('api_library_file', relative=relative)
+        track['delete_url'] = url_for('api_delete_library_file', relative=relative)
         track['cover_url'] = (
             url_for('api_library_cover', relative=relative)
             if track.pop('has_cover') else ''
@@ -927,6 +1078,23 @@ def api_library():
         'directory': directory,
         'tracks': tracks,
     })
+
+
+@app.route('/api/library/delete/<path:relative>', methods=['DELETE'])
+def api_delete_library_file(relative):
+    ext = os.path.splitext(relative)[1].lower().lstrip('.')
+    if ext not in RESULT_EXT_TO_MIME:
+        return '', 404
+    root = os.path.realpath(DOWNLOAD_DIR)
+    path = os.path.realpath(os.path.join(root, relative))
+    try:
+        if os.path.commonpath((root, path)) != root or not os.path.isfile(path):
+            return '', 404
+    except ValueError:
+        return '', 404
+    if not _delete_download_files(path, root=root) or os.path.exists(path):
+        return jsonify({'error': '文件正在使用或无法删除'}), 409
+    return '', 204
 
 
 @app.route('/api/library/file/<path:relative>')

@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -68,6 +69,29 @@ class DesktopApi:
         _save_download_dir(path)
         self.app_module.DOWNLOAD_DIR = str(path)
         return _display_path(path)
+
+    def reveal_downloaded_file(self, relative):
+        if not isinstance(relative, str):
+            return False
+        root = Path(self.app_module.DOWNLOAD_DIR).resolve()
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return False
+        if not path.is_file():
+            return False
+        if sys.platform == 'darwin':
+            command = ['open', '-R', str(path)]
+        elif os.name == 'nt':
+            command = ['explorer', '/select,', str(path)]
+        else:
+            command = ['xdg-open', str(path.parent)]
+        try:
+            subprocess.Popen(command)
+        except OSError:
+            return False
+        return True
 
 
 def main():

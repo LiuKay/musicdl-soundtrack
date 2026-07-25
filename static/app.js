@@ -12,6 +12,7 @@ let libraryQueue = [];
 let currentToken = null;
 let searchES = null;
 let sources = [];
+let desktopReady = false;
 
 const cacheToggle = $('#cacheToggle');
 const cacheLimit = $('#cacheLimit');
@@ -171,6 +172,8 @@ function addRow(t) {
 
 const ICON_PLAY = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>`;
 const ICON_DL = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 3v10m0 0l-4-4m4 4l4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_FOLDER = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M3 6h7l2 2h9v10H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`;
+const ICON_TRASH = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v5m4-5v5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const esc = (s) => (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 /* ------------------------------------------------------------------ */
@@ -432,15 +435,42 @@ async function loadLibrary() {
       tracks.set(t.token, t);
       libraryQueue.push(t.token);
       const li = document.createElement('li');
-      li.className = 'library-item' + (currentToken === t.token ? ' playing' : '');
+      li.className = 'library-item' + (desktopReady ? ' desktop' : '') + (currentToken === t.token ? ' playing' : '');
       li.dataset.token = t.token;
       li.innerHTML = `
         <div class="library-meta">
           <div class="library-name">${esc(t.song_name)}</div>
           <div class="library-sub">${esc(t.singers) || esc(t.source) || '本地音频'} · ${mb(t.file_size_bytes)}</div>
         </div>
-        <button type="button" aria-label="播放 ${esc(t.song_name)}">${ICON_PLAY}</button>`;
-      li.querySelector('button').onclick = () => play(t.token, libraryQueue);
+        <button class="library-play" type="button" aria-label="播放 ${esc(t.song_name)}">${ICON_PLAY}</button>
+        <button class="library-reveal" type="button" aria-label="在文件夹中显示 ${esc(t.song_name)}" ${desktopReady ? '' : 'hidden'}>${ICON_FOLDER}</button>
+        <button class="library-delete" type="button" aria-label="删除 ${esc(t.song_name)}">${ICON_TRASH}</button>`;
+      li.querySelector('.library-play').onclick = () => play(t.token, libraryQueue);
+      li.querySelector('.library-reveal').onclick = async (e) => {
+        e.currentTarget.disabled = true;
+        try {
+          const revealed = await window.pywebview.api.reveal_downloaded_file(t.relative);
+          if (!revealed) throw new Error();
+        } catch {
+          toast('无法定位文件');
+        } finally {
+          e.currentTarget.disabled = false;
+        }
+      };
+      li.querySelector('.library-delete').onclick = async (e) => {
+        if (!confirm(`删除“${t.song_name}”及其本地文件？`)) return;
+        e.currentTarget.disabled = true;
+        try {
+          if (currentToken === t.token) clearLocalPlayback();
+          const response = await fetch(t.delete_url, { method: 'DELETE' });
+          if (!response.ok) throw new Error();
+          await loadLibrary();
+          toast('已删除：' + t.song_name);
+        } catch {
+          e.currentTarget.disabled = false;
+          toast('删除失败');
+        }
+      };
       li.ondblclick = (e) => { if (!e.target.closest('button')) play(t.token, libraryQueue); };
       list.appendChild(li);
     });
@@ -449,7 +479,22 @@ async function loadLibrary() {
   }
 }
 
+function clearLocalPlayback() {
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+  currentToken = null;
+  activeQueue = queue;
+  $('#player').dataset.empty = 'true';
+  $('#npTitle').textContent = '未在播放';
+  $('#npArtist').textContent = '选择一首歌开始';
+  showNoLyrics();
+}
+
 window.addEventListener('pywebviewready', async () => {
+  desktopReady = true;
+  document.querySelectorAll('.library-item').forEach(item => item.classList.add('desktop'));
+  document.querySelectorAll('.library-reveal').forEach(button => { button.hidden = false; });
   const button = $('#chooseDownloadDir');
   button.hidden = false;
   try {
@@ -460,17 +505,7 @@ $('#chooseDownloadDir').onclick = async () => {
   try {
     const path = await window.pywebview.api.choose_download_dir();
     if (!path) return;
-    if (tracks.get(currentToken)?.local) {
-      audio.pause();
-      audio.removeAttribute('src');
-      audio.load();
-      currentToken = null;
-      activeQueue = queue;
-      $('#player').dataset.empty = 'true';
-      $('#npTitle').textContent = '未在播放';
-      $('#npArtist').textContent = '选择一首歌开始';
-      showNoLyrics();
-    }
+    if (tracks.get(currentToken)?.local) clearLocalPlayback();
     $('#downloadDir').textContent = path;
     await loadLibrary();
     toast('下载目录已更新');
@@ -502,7 +537,10 @@ function addDlItem(t) {
   const li = document.createElement('li');
   li.className = 'dl-item';
   li.innerHTML = `
-    <div class="dl-name">${esc(t.song_name)} · ${esc(t.singers)}</div>
+    <div class="dl-top">
+      <div class="dl-name">${esc(t.song_name)} · ${esc(t.singers)}</div>
+      <button class="dl-delete" type="button" aria-label="删除 ${esc(t.song_name)} 下载任务">${ICON_TRASH}</button>
+    </div>
     <div class="dl-bar"><i></i></div>
     <div class="dl-stat"><span class="prog">准备中…</span><span class="s"></span></div>`;
   list.prepend(li);
@@ -510,8 +548,38 @@ function addDlItem(t) {
   return li;
 }
 
+function removeDlItem(item) {
+  if (!item.isConnected) return;
+  item.remove();
+  dlCount = Math.max(0, dlCount - 1);
+  fab.querySelector('.badge').textContent = dlCount;
+  if (!dlCount) {
+    fab.classList.remove('has');
+    $('#dlList').innerHTML = '<li class="dl-empty">暂无下载任务</li>';
+  }
+}
+
 function trackDownload(id, item, btn) {
   const es = new EventSource(`/api/download/${id}/progress`);
+  item.querySelector('.dl-delete').onclick = async (e) => {
+    if (!confirm('删除这个下载任务并清理临时文件？')) return;
+    e.currentTarget.disabled = true;
+    try {
+      const response = await fetch(`/api/download/${id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error();
+      if (response.status === 202) {
+        item.querySelector('.prog').textContent = '取消中…';
+        return;
+      }
+      es.close();
+      removeDlItem(item);
+      if (btn) btn.classList.remove('busy');
+      toast('下载任务已删除');
+    } catch {
+      e.currentTarget.disabled = false;
+      toast('删除失败');
+    }
+  };
   es.addEventListener('progress', (ev) => {
     const d = JSON.parse(ev.data);
     const bar = item.querySelector('.dl-bar i');
@@ -520,7 +588,19 @@ function trackDownload(id, item, btn) {
     if (d.status === 'error') {
       item.classList.add('error'); prog.textContent = '失败';
       s.textContent = (d.message || '').slice(0, 24);
+      item.querySelector('.dl-delete').disabled = false;
       es.close(); if (btn) btn.classList.remove('busy'); return;
+    }
+    if (d.status === 'cancelling') {
+      prog.textContent = '取消中…';
+      s.textContent = '';
+      return;
+    }
+    if (d.status === 'cancelled') {
+      removeDlItem(item);
+      es.close(); if (btn) btn.classList.remove('busy');
+      toast('下载任务已删除');
+      return;
     }
     if (d.status === 'queued') {
       bar.style.width = '0';
@@ -534,13 +614,7 @@ function trackDownload(id, item, btn) {
     prog.textContent = mb(done) + (total ? ' / ' + mb(total) : '');
     if (d.status === 'downloading' && d.speed) s.textContent = mb(d.speed) + '/s';
     if (d.status === 'done') {
-      item.remove();
-      dlCount = Math.max(0, dlCount - 1);
-      fab.querySelector('.badge').textContent = dlCount;
-      if (!dlCount) {
-        fab.classList.remove('has');
-        $('#dlList').innerHTML = '<li class="dl-empty">暂无下载任务</li>';
-      }
+      removeDlItem(item);
       loadLibrary();
       es.close(); if (btn) btn.classList.remove('busy');
       toast('下载完成：' + (d.name || ''));

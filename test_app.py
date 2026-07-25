@@ -8,6 +8,7 @@ from unittest import mock
 
 import fake_useragent
 import app
+import desktop
 
 
 class SearchCompatibilityTest(unittest.TestCase):
@@ -48,6 +49,11 @@ class SearchCompatibilityTest(unittest.TestCase):
         self.assertEqual([source['id'] for source in sources], self.SOURCE_ORDER)
         self.assertEqual(list(app.SUPPORTED_SOURCES), self.SOURCE_ORDER)
         self.assertEqual(app.SOURCE_ORDER, self.SOURCE_ORDER)
+
+    def test_api_rejects_non_local_host(self):
+        response = app.app.test_client().get('/api/library', headers={'Host': 'evil.test'})
+
+        self.assertEqual(response.status_code, 403)
 
     def test_migu_is_the_only_default_source(self):
         sources = app.app.test_client().get('/api/sources').get_json()
@@ -279,6 +285,133 @@ class SearchCompatibilityTest(unittest.TestCase):
             app.DOWNLOADS.pop('second', None)
             app.DOWNLOADS.pop('third', None)
 
+    def test_failed_download_delete_cleans_partial_file(self):
+        download_id = 'failed-download'
+        try:
+            with tempfile.TemporaryDirectory() as root, \
+                    mock.patch.object(app, 'DOWNLOAD_DIR', root):
+                path = os.path.join(root, 'Migu', 'Failed - Artist.mp3')
+                tmp_path = path + f'.{download_id}.part'
+                os.makedirs(os.path.dirname(path))
+                Path(tmp_path).write_bytes(b'partial')
+                app._set_dl(
+                    download_id, status='error', path=path, tmp_path=tmp_path,
+                )
+
+                response = app.app.test_client().delete(f'/api/download/{download_id}')
+
+                self.assertEqual(response.status_code, 204)
+                self.assertFalse(Path(tmp_path).exists())
+                self.assertEqual(app._get_dl(download_id), {})
+        finally:
+            app.DOWNLOADS.pop(download_id, None)
+            app.DOWNLOAD_CANCELLED.discard(download_id)
+
+    def test_active_download_delete_stops_and_cleans_partial_file(self):
+        download_id = 'active-download'
+        token = 'active-download-token'
+        entry = {
+            'song_info': SimpleNamespace(
+                download_url='https://example.test/audio.mp3',
+                song_name='Active', singers='Artist', ext='mp3',
+                file_size_bytes=6,
+            ),
+            'source': 'MiguMusicClient', 'headers': {}, 'cookies': {},
+        }
+        upstream = mock.MagicMock()
+        upstream.__enter__.return_value = upstream
+        upstream.headers = {'Content-Length': '6'}
+        app.REGISTRY._tracks[token] = entry
+        old_active = app.DOWNLOAD_ACTIVE
+        try:
+            with tempfile.TemporaryDirectory() as root, \
+                    mock.patch.object(app, 'DOWNLOAD_DIR', root), \
+                    mock.patch.object(app.requests, 'get', return_value=upstream):
+                client = app.app.test_client()
+
+                def chunks(chunk_size):
+                    yield b'abc'
+                    app.DOWNLOAD_DIR = os.path.join(root, 'new-downloads')
+                    self.assertEqual(
+                        client.delete(f'/api/download/{download_id}').status_code,
+                        202,
+                    )
+                    yield b'def'
+
+                upstream.iter_content.side_effect = chunks
+                app.DOWNLOAD_ACTIVE = 1
+                app._set_dl(download_id, status='queued')
+                app._run_download_job(download_id, token)
+                path = os.path.join(root, 'Migu', 'Active - Artist.mp3')
+                tmp_path = path + f'.{download_id}.part'
+
+                self.assertFalse(Path(path).exists())
+                self.assertFalse(Path(tmp_path).exists())
+                self.assertEqual(app._get_dl(download_id)['status'], 'cancelled')
+        finally:
+            app.DOWNLOAD_ACTIVE = old_active
+            app.REGISTRY._tracks.pop(token, None)
+            app.DOWNLOADS.pop(download_id, None)
+            app.DOWNLOAD_CANCELLED.discard(download_id)
+
+    def test_active_download_delete_after_publish_removes_audio(self):
+        download_id = 'published-download'
+        token = 'published-download-token'
+        entry = {
+            'song_info': SimpleNamespace(
+                download_url='https://example.test/audio.mp3',
+                song_name='Published', singers='Artist', ext='mp3',
+                file_size_bytes=3,
+            ),
+            'source': 'MiguMusicClient', 'headers': {}, 'cookies': {},
+        }
+        upstream = mock.MagicMock()
+        upstream.__enter__.return_value = upstream
+        upstream.headers = {'Content-Length': '3'}
+        upstream.iter_content.return_value = [b'abc']
+        app.REGISTRY._tracks[token] = entry
+        old_active = app.DOWNLOAD_ACTIVE
+        try:
+            with tempfile.TemporaryDirectory() as root, \
+                    mock.patch.object(app, 'DOWNLOAD_DIR', root), \
+                    mock.patch.object(app.requests, 'get', return_value=upstream), \
+                    mock.patch.object(app, '_save_download_metadata') as save_metadata:
+                client = app.app.test_client()
+                save_metadata.side_effect = lambda path, item: client.delete(
+                    f'/api/download/{download_id}',
+                )
+                app.DOWNLOAD_ACTIVE = 1
+                app._set_dl(download_id, status='queued')
+                app._run_download_job(download_id, token)
+                path = Path(root) / 'Migu' / 'Published - Artist.mp3'
+
+                self.assertFalse(path.exists())
+                self.assertEqual(app._get_dl(download_id)['status'], 'cancelled')
+        finally:
+            app.DOWNLOAD_ACTIVE = old_active
+            app.REGISTRY._tracks.pop(token, None)
+            app.DOWNLOADS.pop(download_id, None)
+            app.DOWNLOAD_CANCELLED.discard(download_id)
+
+    def test_active_download_cleanup_failure_keeps_error_record(self):
+        download_id = 'cleanup-failure'
+        old_active = app.DOWNLOAD_ACTIVE
+        try:
+            app.DOWNLOAD_ACTIVE = 1
+            app._set_dl(download_id, status='cancelling', path='/tmp/song.mp3')
+            app.DOWNLOAD_CANCELLED.add(download_id)
+            with mock.patch.object(app, 'run_download'), \
+                    mock.patch.object(app, '_delete_download_files', return_value=False):
+                app._run_download_job(download_id, 'token')
+
+            record = app._get_dl(download_id)
+            self.assertEqual(record['status'], 'error')
+            self.assertIn('无法清理', record['message'])
+        finally:
+            app.DOWNLOAD_ACTIVE = old_active
+            app.DOWNLOADS.pop(download_id, None)
+            app.DOWNLOAD_CANCELLED.discard(download_id)
+
     def test_download_metadata_saves_raster_cover(self):
         response = mock.MagicMock()
         response.__enter__.return_value = response
@@ -339,6 +472,7 @@ class SearchCompatibilityTest(unittest.TestCase):
                 ('Metadata Song', 'Metadata Singer'),
             )
             self.assertEqual(library['tracks'][0]['lyric'], '[00:01.00]Hello')
+            self.assertEqual(library['tracks'][0]['relative'], 'Migu/Song - Singer.mp3')
             cover = client.get(library['tracks'][0]['cover_url'])
             cover_body = cover.data
             cover_nosniff = cover.headers['X-Content-Type-Options']
@@ -352,12 +486,41 @@ class SearchCompatibilityTest(unittest.TestCase):
 
             with app.app.test_request_context():
                 escaped = app.api_library_file('../outside.mp3')
+                escaped_delete = app.api_delete_library_file('../outside.mp3')
+
+            with mock.patch.object(app.os, 'remove', side_effect=PermissionError):
+                failed_delete = client.delete(library['tracks'][0]['delete_url'])
+            deleted = client.delete(library['tracks'][0]['delete_url'])
+            deleted_files = [
+                audio, Path(str(audio) + '.soundtrack.json'),
+                Path(str(audio) + '.soundtrack.cover'), audio.with_suffix('.lrc'),
+            ]
 
         self.assertEqual(response.status_code, 206)
         self.assertEqual(body, b'3456')
         self.assertEqual(cover_body, b'cover')
         self.assertEqual(cover_nosniff, 'nosniff')
         self.assertEqual(escaped[1], 404)
+        self.assertEqual(escaped_delete[1], 404)
+        self.assertEqual(failed_delete.status_code, 409)
+        self.assertEqual(deleted.status_code, 204)
+        self.assertFalse(any(path.exists() for path in deleted_files))
+
+    def test_desktop_reveals_only_downloaded_files(self):
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(app, 'DOWNLOAD_DIR', root), \
+                mock.patch.object(desktop.sys, 'platform', 'darwin'), \
+                mock.patch.object(desktop.subprocess, 'Popen') as popen:
+            source = Path(root) / 'Migu'
+            source.mkdir()
+            audio = source / 'Song - Singer.mp3'
+            audio.write_bytes(b'audio')
+            api = desktop.DesktopApi(app)
+
+            self.assertTrue(api.reveal_downloaded_file('Migu/Song - Singer.mp3'))
+            self.assertFalse(api.reveal_downloaded_file('../outside.mp3'))
+            self.assertFalse(api.reveal_downloaded_file('Migu/missing.mp3'))
+            popen.assert_called_once_with(['open', '-R', str(audio.resolve())])
 
     def test_player_uses_web_audio_gain_for_volume(self):
         script = Path('static/app.js').read_text()
