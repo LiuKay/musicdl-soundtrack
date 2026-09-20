@@ -9,7 +9,7 @@
 A modern web-based music **search / download / player** built on top of [musicdl](https://github.com/CharlesPikachu/musicdl).
 Supports eight sources: Migu, NetEase Cloud Music, Kuwo, QQ Music, Kugou, 5sing, Jamendo, and Spotify. **Migu is the only source enabled by default** — the rest are one click away in the UI.
 
-![soundtrack](soundtrack.png)
+![soundtrack](docs/interface-desktop.png)
 
 ## Why it doesn't freeze
 
@@ -57,21 +57,32 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run 
 ## Usage
 
 - Type a keyword in the top bar to search; results stream in one by one.
-- Toggle music sources with the chips at the top (only Migu is on by default).
+- Toggle music sources in the sidebar (a horizontal list at the top on phones; only Migu is on by default). The light interface uses layered neutral surfaces, a berry-red accent, and system fonts with no online font dependency.
+- The first returned track appears with larger artwork and a play button; this is not a popularity or recommendation ranking.
 - Each row: ▷ play, ⭳ download. Double-clicking a row also plays it.
 - Bottom player bar: previous / play-pause / next, seek, volume, live spectrum.
 - “Cache while playing” keeps listened tracks locally and removes the oldest cache files when the selected 512 MB–5 GB limit is exceeded.
 - The download drawer can run 1–5 downloads at once; additional tasks wait in click order.
-- The "词" button opens the synced lyrics panel; the bottom-right button opens downloads, changes the download folder, and plays downloaded tracks inside the existing player.
+- The "词" button opens synced lyrics; "下载与资料库" opens downloads, changes the download folder, and plays downloaded tracks inside the existing player.
 - New downloads create a matching `.lrc` and try to embed title, artist, album, lyrics, and artwork into MP3, FLAC, M4A, and OGG files; internal `.soundtrack.json` and `.soundtrack.cover.jpg/.png/...` files remain only as app index/fallback data.
 - Shortcuts: `Space` to play/pause, `Alt+←/→` for previous/next track.
+- `Esc` closes drawers. Focus the seek or volume slider and use arrow keys to adjust it, or `Home/End` to reach either end. Phones retain seeking and cache settings.
+
+## UI verification
+
+```bash
+node --test test_ui.cjs
+python -m unittest -v test_app.py
+```
+
+Frontend regression tests need no extra Node.js packages and cover playback icons, drawer state, keyboard sliders, and search states. Live music providers still require manual online verification.
 
 ## Structure
 
 ```
 app.py             Flask backend: streaming search (SSE) / audio proxy (Range) / cover proxy / download progress (SSE)
 static/index.html  UI markup
-static/style.css   Visual styling (dark "recording-studio" theme)
+static/style.css   Visual styling (Apple Music-inspired light workspace)
 static/app.js      Frontend logic: streaming render / Web Audio spectrum / synced lyrics / downloads
 ```
 

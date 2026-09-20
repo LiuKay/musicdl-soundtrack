@@ -4,52 +4,53 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>声轨 · Soundtrack</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="grain"></div>
-
-<header class="topbar">
+<aside class="sidebar" aria-label="音乐导航">
   <div class="brand">
     <div class="brand-mark" id="brandMark">
       <span></span><span></span><span></span><span></span><span></span>
     </div>
     <div class="brand-text">
       <h1>声轨</h1>
-      <p>Soundtrack · powered by musicdl</p>
+      <p>Soundtrack</p>
     </div>
   </div>
 
-  <form class="search" id="searchForm" autocomplete="off">
+  <nav class="navigation" aria-label="资料库">
+    <button class="nav-item selected" id="browseButton" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>搜索音乐</button>
+    <button class="nav-item" id="downloadsButton" type="button" aria-controls="dlDrawer" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg>下载与资料库<span class="badge">0</span></button>
+  </nav>
+  <section class="sourcebar" aria-labelledby="sourceLabel">
+    <h2 class="sidebar-label" id="sourceLabel">音乐来源 <span>可多选</span></h2>
+    <div class="chips" id="chips"></div>
+    <p class="source-help" id="sourceHelp">正在连接音乐来源…</p>
+  </section>
+  <div class="sidebar-bottom">
+    <div class="cache-controls">
+      <label class="cache-toggle"><span>边听边存</span><input id="cacheToggle" type="checkbox"><span class="cache-switch" aria-hidden="true"></span></label>
+      <label class="cache-capacity" for="cacheLimit">缓存上限<select id="cacheLimit"><option value="512">512 MB</option><option value="1024" selected>1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option></select></label>
+    </div>
+    <p class="sidebar-credit">为喜欢的音乐，留个位置。<span>POWERED BY MUSICDL</span></p>
+  </div>
+</aside>
+
+<header class="topbar">
+  <span class="topbar-label">音乐，随心而听。</span>
+  <form class="search" id="searchForm" role="search" autocomplete="off">
     <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-    <input id="searchInput" type="text" placeholder="搜索歌曲、艺人…" spellcheck="false">
+    <input id="searchInput" type="search" aria-label="搜索歌曲、艺人" placeholder="搜索歌曲、艺人或专辑" spellcheck="false">
     <button type="submit" id="searchBtn">搜索</button>
   </form>
 </header>
 
-<div class="sourcebar">
-  <span class="sourcebar-label">音乐源</span>
-  <div class="chips" id="chips"></div>
-  <span class="sourcebar-hint" id="searchStatus"></span>
-  <div class="cache-controls">
-    <label class="cache-toggle">
-      <input id="cacheToggle" type="checkbox">
-      <span class="cache-switch" aria-hidden="true"></span>
-      <span>边听边存</span>
-    </label>
-    <select id="cacheLimit" aria-label="缓存容量上限">
-      <option value="512">512 MB</option>
-      <option value="1024" selected>1 GB</option>
-      <option value="2048">2 GB</option>
-      <option value="5120">5 GB</option>
-    </select>
-  </div>
-</div>
-
 <main class="results-wrap">
+  <div class="page-heading"><div><p class="eyebrow">YOUR MUSIC, YOUR MOMENT</p><h1 id="pageTitle">搜索音乐</h1></div><span class="sourcebar-hint" id="searchStatus" role="status" aria-live="polite"></span></div>
+  <section class="spotlight" id="spotlight" hidden aria-label="首个搜索结果">
+    <div class="spotlight-cover" id="spotlightCover"></div>
+    <div class="spotlight-copy"><p class="eyebrow">从这首开始</p><h2 id="spotlightTitle"></h2><p id="spotlightArtist"></p><button class="primary-button" id="spotlightPlay" type="button">播放歌曲</button></div>
+  </section>
   <div class="results-head" id="resultsHead" hidden>
     <span class="col col-cover"></span>
     <span class="col col-title">曲目</span>
@@ -62,16 +63,14 @@
   <ul class="results" id="results"></ul>
 
   <div class="placeholder" id="placeholder">
-    <div class="placeholder-viz">
-      <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-    </div>
-    <h2>从一句歌词开始</h2>
-    <p>输入关键词，结果会随搜索逐条浮现 —— 不必等待整页加载。</p>
+    <div class="empty-art" aria-hidden="true"><svg viewBox="0 0 160 160"><path d="M65 105V42l63-13v64M65 62l63-13"/><ellipse cx="47" cy="111" rx="18" ry="13"/><ellipse cx="110" cy="99" rx="18" ry="13"/></svg></div>
+    <div class="empty-copy"><span class="eyebrow">听见喜欢，留住热爱</span><h2>下一首循环，<br>从这里开始。</h2><p>搜索一首歌、一位艺人，<br>把此刻的心情放进音乐里。</p></div>
+    <div class="search-suggestions"><span>试试搜索</span><button type="button" data-query="周杰伦">周杰伦 <span>↗</span></button><button type="button" data-query="陈奕迅">陈奕迅 <span>↗</span></button><button type="button" data-query="爵士">爵士 <span>↗</span></button><button type="button" data-query="纯音乐">纯音乐 <span>↗</span></button></div>
   </div>
 </main>
 
 <!-- Lyrics panel -->
-<aside class="lyrics-panel" id="lyricsPanel">
+<aside class="lyrics-panel" id="lyricsPanel" aria-label="歌词" inert>
   <div class="lyrics-head">
     <span>歌词</span>
     <button id="lyricsClose" aria-label="关闭歌词">✕</button>
@@ -80,9 +79,9 @@
 </aside>
 
 <!-- Downloads drawer -->
-<aside class="dl-drawer" id="dlDrawer">
+<aside class="dl-drawer" id="dlDrawer" aria-label="下载与资料库" inert>
   <div class="dl-head">
-    <span>下载</span>
+    <span>下载与资料库</span>
     <button id="dlClose" aria-label="关闭下载面板">✕</button>
   </div>
   <div class="dl-folder">
@@ -126,7 +125,7 @@
       <div class="np-title" id="npTitle">未在播放</div>
       <div class="np-artist" id="npArtist">选择一首歌开始</div>
     </div>
-    <button class="np-lyric-btn" id="lyricsToggle" title="歌词">词</button>
+    <button class="np-lyric-btn" id="lyricsToggle" title="歌词" aria-label="显示歌词" aria-controls="lyricsPanel" aria-expanded="false">词</button>
   </div>
 
   <div class="np-center">
@@ -140,7 +139,7 @@
     </div>
     <div class="seek">
       <span class="time" id="curTime">0:00</span>
-      <div class="seek-track" id="seekTrack"><div class="seek-fill" id="seekFill"></div><div class="seek-knob" id="seekKnob"></div></div>
+      <div class="seek-track" id="seekTrack" role="slider" tabindex="0" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="seek-fill" id="seekFill"></div><div class="seek-knob" id="seekKnob"></div></div>
       <span class="time" id="durTime">0:00</span>
     </div>
   </div>
@@ -149,13 +148,13 @@
     <canvas class="viz" id="viz" width="220" height="44"></canvas>
     <div class="vol">
       <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 9v6h4l5 5V4L8 9H4z" fill="currentColor"/></svg>
-      <div class="vol-track" id="volTrack"><div class="vol-fill" id="volFill"></div></div>
+      <div class="vol-track" id="volTrack" role="slider" tabindex="0" aria-label="音量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="75"><div class="vol-fill" id="volFill"></div></div>
     </div>
   </div>
 </footer>
 
 <audio id="audio" crossorigin="anonymous"></audio>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="/static/app.js"></script>
 </body>
 </html>
