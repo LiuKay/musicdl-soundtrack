@@ -292,11 +292,12 @@ def search_stream(keyword, sources):
                 emit('source_error', {'source': source, 'message': str(err)})
                 return
             buckets = [[] for _ in search_urls]
+            errors = []
             threads = []
             for i, url in enumerate(search_urls):
                 t = threading.Thread(
                     target=_safe_search,
-                    args=(client, keyword, url, buckets[i], progress),
+                    args=(client, keyword, url, buckets[i], progress, errors),
                     daemon=True,
                 )
                 t.start()
@@ -315,7 +316,8 @@ def search_stream(keyword, sources):
             # final flush of anything that landed at the very end
             count += _drain(buckets, cursors, source, seen_identifiers, seen_lock, emit)
             timed_out = any(t.is_alive() for t in threads)
-            emit('source_done', {'source': source, 'count': count, 'timed_out': timed_out})
+            emit('source_done', {'source': source, 'count': count,
+                                 'timed_out': timed_out, 'error_count': len(errors)})
         except Exception as err:
             emit('source_error', {'source': source, 'message': str(err)})
         finally:
@@ -346,12 +348,13 @@ def search_stream(keyword, sources):
     yield f'event: done\ndata: {{"count": {total}}}\n\n'
 
 
-def _safe_search(client, keyword, url, bucket, progress):
+def _safe_search(client, keyword, url, bucket, progress, errors=None):
     try:
         client._search(keyword=keyword, search_url=url, request_overrides={},
                         song_infos=bucket, progress=progress)
     except Exception:
-        pass
+        if errors is not None:
+            errors.append(True)
 
 
 def _drain(buckets, cursors, source, seen, lock, emit):

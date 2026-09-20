@@ -41,6 +41,26 @@ class SearchCompatibilityTest(unittest.TestCase):
             data_files = list(resources.glob('lib/python*/fake_useragent/data/browsers.jsonl'))
             self.assertTrue(data_files)
 
+    def test_safe_search_counts_failed_requests_without_exposing_details(self):
+        client = SimpleNamespace(_search=mock.Mock(side_effect=RuntimeError('private detail')))
+        errors = []
+        app._safe_search(client, 'query', 'url', [], app._NullProgress(), errors)
+        self.assertEqual(errors, [True])
+
+    def test_source_done_reports_request_failures(self):
+        client = SimpleNamespace(
+            _constructsearchurls=lambda **kwargs: ['url'],
+            _search=mock.Mock(side_effect=RuntimeError('private detail')),
+        )
+        with mock.patch.object(app.MANAGER, 'client', return_value=client):
+            events = list(app.search_stream('query', ['MiguMusicClient']))
+        done = next(event for event in events if event.startswith('event: source_done'))
+        data = json.loads(done.split('data: ', 1)[1])
+        self.assertEqual(data['error_count'], 1)
+        self.assertEqual(data['count'], 0)
+        self.assertFalse(data['timed_out'])
+        self.assertNotIn('private detail', ''.join(events))
+
     def test_sources_api_lists_supported_sources_in_order(self):
         response = app.app.test_client().get('/api/sources')
 

@@ -7,9 +7,9 @@
     <meta name="theme-color" content="#0d0c0a">
     <meta
       name="description"
-      content="musicdl-soundtrack 是一个由 musicdl 驱动的桌面音乐搜索、试听与下载界面。"
+      content="声轨 Soundtrack：本地音乐搜索、播放与下载界面，提供独立队列、随机与循环、多选下载、来源状态和同步歌词。支持本机浏览器、macOS 与 Windows。"
     >
-    <title>声轨 Soundtrack · musicdl 桌面音乐客户端</title>
+    <title>声轨 Soundtrack · 搜索、排队播放、多选下载</title>
     <link rel="stylesheet" href="style.css">
   </head>
   <body>
@@ -19,8 +19,8 @@
         <div class="intro-copy">
           <h1 id="product-title">声轨 <span>Soundtrack</span></h1>
           <p>
-            一个由 musicdl 驱动的桌面音乐客户端。支持咪咕、网易云、酷我、QQ、
-            酷狗、5sing、Jamendo 与 Spotify，聚合搜索、试听与下载。
+            搜索音乐，安排接下来要听的歌，再把选中的歌曲下载到本地。
+            由 musicdl 驱动，可在本机浏览器运行，也可打包为 macOS / Windows 桌面应用。
           </p>
         </div>
       </section>
@@ -28,17 +28,48 @@
       <section class="interface" aria-labelledby="interface-title">
         <div class="section-label">
           <p>Interface / 01</p>
-          <h2 id="interface-title">所有操作，都在一条声轨上。</h2>
+          <h2 id="interface-title">逐条看结果，选好再下载。</h2>
         </div>
         <figure class="interface-frame">
+          <a class="screenshot-link" href="interface-desktop.webp" aria-label="查看搜索与多选下载界面原图">
           <img
-            src="soundtrack.png"
-            width="2868"
-            height="1908"
-            alt="声轨 Soundtrack 桌面客户端界面，展示音乐搜索结果和底部播放控制栏"
+            src="interface-desktop.webp"
+            width="1280"
+            height="900"
+            fetchpriority="high"
+            alt="声轨浅色主界面：咪咕来源搜索完成，勾选两首歌曲后可批量下载，底部为常驻播放器"
           >
-          <figcaption>产品界面实拍</figcaption>
+          </a>
+          <figcaption>当前源码截图 · 来源状态 / 多选下载 · 点击图片查看原图</figcaption>
         </figure>
+        <ul class="capability-list">
+          <li><strong>来源各自显示状态</strong><p>默认开启咪咕，可选网易云、酷我、QQ、酷狗、5sing、Jamendo 和 Spotify。结果逐条出现，超时或失败单独提示。</p></li>
+          <li><strong>一次选择，多首下载</strong><p>勾选歌曲或全选当前结果，按所设的 1–5 首并发数下载。已下载歌曲可在本地资料库中播放和管理。</p></li>
+        </ul>
+      </section>
+
+      <section class="interface" aria-labelledby="queue-title">
+        <div class="section-label">
+          <p>Playback / 02</p>
+          <h2 id="queue-title">继续找歌，不打断当前队列。</h2>
+        </div>
+        <figure class="interface-frame">
+          <a class="screenshot-link" href="interface-queue.webp" aria-label="查看独立播放队列界面原图">
+            <img src="interface-queue.webp" width="1280" height="900" loading="lazy" alt="独立播放队列面板：查看八首歌曲、移除待播曲目或清空待播，底部保留播放与循环控制">
+          </a>
+          <figcaption>当前源码截图 · 独立队列 / 随机与循环 · 点击图片查看原图</figcaption>
+        </figure>
+        <ul class="capability-list">
+          <li><strong>按自己的顺序听</strong><p>播放全部、插入下一首或移除待播歌曲，也可以切换随机、列表循环与单曲循环。重新搜索不会清空当前队列。</p></li>
+          <li><strong>歌词与缓存随手可用</strong><p>打开同步歌词，点击歌词行跳转；开启边听边存，并设置 512 MB–5 GB 的缓存上限。手机布局保留队列、进度和多选操作。</p></li>
+        </ul>
+      </section>
+
+      <section class="usage-note" aria-labelledby="usage-title">
+        <h2 id="usage-title">使用前了解</h2>
+        <p>这里是项目展示页，不提供在线搜索或下载服务。实际使用需在本机启动应用，并能访问所选音乐来源；来源可用性和音质取决于网络、接口与访问权限。</p>
+        <p>播放队列和模式刷新后重置。收藏、歌单链接导入、下载断点续传尚未提供；当前只处理可用的直接音频链接，不支持专用媒体解密、HLS 合并或转码。Apple Music 风格仅指界面设计，不代表接入其服务。</p>
+        <p>请仅下载你有权使用的内容，并遵守来源平台条款。截图展示当前源码功能，发行包请以对应 Release 说明为准。</p>
       </section>
 
       <section class="action-row" aria-labelledby="repository-title">
@@ -46,7 +77,7 @@
         <div class="action-copy">
           <p class="action-kicker">Open source</p>
           <h2 id="repository-title">在 GitHub 查看项目</h2>
-          <p>浏览源代码、安装说明和项目动态。</p>
+          <p>查看源代码、中英文使用说明，以及本地运行和打包方法。</p>
         </div>
         <a class="action-link action-link-secondary" href="https://github.com/LiuKay/musicdl-soundtrack">
           GitHub 仓库
@@ -59,7 +90,7 @@
         <div class="action-copy">
           <p class="action-kicker">Desktop releases</p>
           <h2 id="download-title">下载 Windows / macOS 版本</h2>
-          <p>前往最新 Release，按系统选择 Windows 或 macOS 压缩包。</p>
+          <p>前往 Release 页面查看可用安装包，按系统与架构选择附件；也可按 README 从源码构建。</p>
         </div>
         <a class="action-link action-link-primary" href="https://github.com/LiuKay/musicdl-soundtrack/releases/latest">
           前往下载

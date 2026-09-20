@@ -7,8 +7,17 @@ const $ = (s) => document.querySelector(s);
 const audio = $('#audio');
 const tracks = new Map();          // token -> payload
 let queue = [];                    // ordered tokens (play order)
-let activeQueue = queue;
+let activeQueue = [];              // independent from search results
 let libraryQueue = [];
+let libraryRequestId = 0;
+let shuffleEnabled = false;
+let shuffleOrder = [];
+let repeatMode = 'off';            // off | all | one
+const selectedTokens = new Set();
+const downloadingTokens = new Set();
+const batchTokens = new Set();
+const sourceStates = new Map();
+let batchDownloading = false;
 let currentToken = null;
 let searchES = null;
 let sources = [];
@@ -97,8 +106,11 @@ function runSearch() {
   if (!q) return;
   if (searchES) { searchES.close(); searchES = null; }
 
-  for (const [token, track] of tracks) { if (!track.local) tracks.delete(token); }
   queue = [];
+  selectedTokens.clear();
+  pruneTracks();
+  updateSelection();
+  sourceStates.clear();
   $('#results').innerHTML = '';
   $('#spotlight').hidden = true;
   $('#pageTitle').textContent = q;
@@ -108,6 +120,7 @@ function runSearch() {
   $('#searchBtn').disabled = true;
 
   const srcs = activeSources();
+  srcs.forEach(id => setSourceState(id, 'busy', '等待响应'));
   const pending = new Set(srcs);
   let count = 0;
   let finished = false;
@@ -118,42 +131,116 @@ function runSearch() {
   searchES = es;
 
   es.addEventListener('result', (ev) => {
+    if (searchES !== es) return;
     const t = JSON.parse(ev.data);
     tracks.set(t.token, t);
     queue.push(t.token);
     addRow(t);
+    updateSelection();
     if (count === 0) showSpotlight(t);
     count++;
     setStatus(true, `已找到 ${count} 首…`);
   });
-  es.addEventListener('source_start', () => {});
+  es.addEventListener('source_start', (ev) => {
+    if (searchES !== es) return;
+    setSourceState(JSON.parse(ev.data).source, 'busy', '搜索中');
+  });
   es.addEventListener('source_done', (ev) => {
+    if (searchES !== es) return;
     const d = JSON.parse(ev.data);
     pending.delete(d.source);
+    setSourceState(d.source, d.timed_out || d.error_count ? 'warning' : 'done',
+      `${d.count || 0} 首${d.timed_out ? ' · 超时' : d.error_count ? ' · 部分请求失败' : ' · 完成'}`);
   });
   es.addEventListener('source_error', (ev) => {
+    if (searchES !== es) return;
     const d = JSON.parse(ev.data);
     pending.delete(d.source);
+    setSourceState(d.source, 'error', '连接失败，请重试');
   });
   es.addEventListener('done', () => {
+    if (searchES !== es) return;
     finished = true;
     es.close(); searchES = null;
     $('#searchBtn').disabled = false;
     if (count === 0) {
-      showSearchMessage('没有找到结果', '换个关键词，或启用更多音乐来源再试试。');
+      const failed = [...sourceStates.values()].some(s => ['error', 'warning'].includes(s.state));
+      showSearchMessage(failed ? '部分来源未能完成搜索' : '没有找到结果',
+        failed ? '查看上方来源状态，稍后重试或换个音乐来源。' : '换个关键词，或启用更多音乐来源再试试。');
       setStatus(false, '');
     } else {
       setStatus(false, `共 ${count} 首`);
     }
   });
   es.onerror = () => {
-    if (finished) return;
+    if (finished || searchES !== es) return;
+    pending.forEach(id => setSourceState(id, 'error', '连接中断'));
     es.close(); searchES = null;
     $('#searchBtn').disabled = false;
     setStatus(false, count ? `共 ${count} 首` : '');
     if (count === 0) showSearchMessage('连接暂时中断', '请重新搜索，或切换音乐来源后再试。');
   };
 }
+
+function setSourceState(id, state, text) {
+  sourceStates.set(id, { state, text });
+  renderSourceStates();
+}
+
+function renderSourceStates() {
+  const wrap = $('#sourceStatusList');
+  wrap.replaceChildren();
+  sourceStates.forEach(({ state, text }, id) => {
+    const status = document.createElement('span');
+    status.className = 'source-state ' + state;
+    status.textContent = `${sources.find(s => s.id === id)?.label || id} · ${text}`;
+    wrap.appendChild(status);
+  });
+  wrap.hidden = sourceStates.size === 0;
+}
+
+function pruneTracks() {
+  const keep = new Set([...queue, ...activeQueue, ...libraryQueue, ...downloadingTokens, ...batchTokens, currentToken]);
+  for (const token of tracks.keys()) { if (!keep.has(token)) tracks.delete(token); }
+}
+
+function updateSelection() {
+  const count = queue.filter(token => selectedTokens.has(token)).length;
+  $('#resultsToolbar').hidden = queue.length === 0;
+  $('#selectionCount').textContent = count ? `已选 ${count} 首` : `${queue.length} 首歌曲`;
+  $('#selectAll').checked = queue.length > 0 && count === queue.length;
+  $('#selectAll').indeterminate = count > 0 && count < queue.length;
+  $('#downloadSelected').disabled = !count || batchDownloading;
+  $('#downloadSelected').textContent = batchDownloading ? '正在添加…' : '下载所选';
+}
+
+$('#selectAll').onchange = e => {
+  queue.forEach(token => e.target.checked ? selectedTokens.add(token) : selectedTokens.delete(token));
+  document.querySelectorAll('.row-select').forEach(input => { input.checked = e.target.checked; });
+  updateSelection();
+};
+async function downloadSelected() {
+  if (batchDownloading) return;
+  const tokens = queue.filter(token => selectedTokens.has(token));
+  batchDownloading = true;
+  tokens.forEach(token => batchTokens.add(token));
+  updateSelection();
+  let started = 0;
+  try {
+    for (const token of tokens) {
+      if (await startDownload(token)) { started++; selectedTokens.delete(token); }
+    }
+  } finally {
+    batchTokens.clear();
+    batchDownloading = false;
+    document.querySelectorAll('.row').forEach(row => { row.querySelector('.row-select').checked = selectedTokens.has(row.dataset.token); });
+    updateSelection();
+    pruneTracks();
+    toast(`已添加 ${started} / ${tokens.length} 首到下载任务`);
+  }
+}
+$('#downloadSelected').onclick = downloadSelected;
+$('#playAll').onclick = () => { if (queue.length) play(queue[0], queue); };
 
 function showSpotlight(t) {
   $('#spotlight').hidden = false;
@@ -187,6 +274,7 @@ function addRow(t) {
     ? `<img src="/api/cover/${t.token}" alt="" width="42" height="42" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"><span class="ph" style="display:none">♪</span>`
     : `<span class="ph">♪</span>`;
   li.innerHTML = `
+    <label class="row-selection"><input class="row-select" type="checkbox" aria-label="选择 ${esc(t.song_name)}"></label>
     <div class="r-cover">
       ${cover}
       <span class="eq"><i></i><i></i><i></i></span>
@@ -201,11 +289,17 @@ function addRow(t) {
     <div class="r-src"><span class="tag">${esc(t.source)}</span></div>
     <div class="r-act">
       <button class="a-play" title="播放" aria-label="播放 ${esc(t.song_name)}">${ICON_PLAY}</button>
+      <button class="a-next" title="下一首播放" aria-label="下一首播放 ${esc(t.song_name)}">${ICON_QUEUE}</button>
       <button class="a-dl" title="下载" aria-label="下载 ${esc(t.song_name)}">${ICON_DL}</button>
     </div>`;
   li.querySelector('.a-play').onclick = (e) => { e.stopPropagation(); play(t.token); };
   li.querySelector('.a-dl').onclick = (e) => { e.stopPropagation(); startDownload(t.token, e.currentTarget); };
-  li.ondblclick = () => play(t.token);
+  li.querySelector('.a-next').onclick = () => enqueueNext(t.token);
+  li.querySelector('.row-select').onchange = e => {
+    e.target.checked ? selectedTokens.add(t.token) : selectedTokens.delete(t.token);
+    updateSelection();
+  };
+  li.ondblclick = e => { if (!e.target.closest('button, input, label')) play(t.token); };
   $('#results').appendChild(li);
 }
 
@@ -213,6 +307,7 @@ const ICON_PLAY = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M8 5
 const ICON_DL = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 3v10m0 0l-4-4m4 4l4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const ICON_FOLDER = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M3 6h7l2 2h9v10H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`;
 const ICON_TRASH = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v5m4-5v5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ICON_QUEUE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 6h16M4 11h9M4 16h7m6-3v8m-4-4h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`;
 const esc = (s) => (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 /* ------------------------------------------------------------------ */
@@ -237,11 +332,14 @@ function ensureAudioGraph() {
   drawViz();
 }
 
-function play(token, playQueue = queue) {
+function play(token, playQueue = null) {
   const t = tracks.get(token);
   if (!t) return;
+  if (playQueue !== null) activeQueue = [...new Set(playQueue)].filter(id => tracks.has(id));
+  else if (!activeQueue.includes(token)) activeQueue = [...queue];
+  if (!activeQueue.includes(token)) activeQueue.push(token);
+  if (playQueue !== null || !shuffleOrder.includes(token)) resetShuffle(token);
   currentToken = token;
-  activeQueue = playQueue;
   ensureAudioGraph();
   if (audioCtx.state === 'suspended') audioCtx.resume();
 
@@ -272,23 +370,100 @@ function play(token, playQueue = queue) {
 
   if (t.local) showLyrics(t.lyric);
   else loadLyrics(token);
+  renderQueue();
 }
 
-function step(dir) {
-  if (!currentToken) return;
-  const i = activeQueue.indexOf(currentToken);
-  const next = activeQueue[i + dir];
-  if (next) play(next, activeQueue);
+function resetShuffle(first = currentToken) {
+  shuffleOrder = activeQueue.filter(token => token !== first);
+  for (let i = shuffleOrder.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffleOrder[i], shuffleOrder[j]] = [shuffleOrder[j], shuffleOrder[i]];
+  }
+  if (activeQueue.includes(first)) shuffleOrder.unshift(first);
 }
+
+function nextToken(order, token, dir, mode, automatic = false) {
+  if (!order.length) return null;
+  if (automatic && mode === 'one' && order.includes(token)) return token;
+  const index = order.indexOf(token);
+  const next = index + dir;
+  if (next >= 0 && next < order.length) return order[next];
+  return mode === 'all' ? order[(next + order.length) % order.length] : null;
+}
+
+function step(dir, automatic = false) {
+  if (!currentToken) return;
+  const order = shuffleEnabled ? shuffleOrder : activeQueue;
+  const next = nextToken(order, currentToken, dir, repeatMode, automatic);
+  if (next) play(next);
+}
+
+function enqueueNext(token) {
+  if (!tracks.has(token) || token === currentToken) return;
+  activeQueue = activeQueue.filter(id => id !== token);
+  activeQueue.splice(Math.max(0, activeQueue.indexOf(currentToken) + 1), 0, token);
+  shuffleOrder = shuffleOrder.filter(id => id !== token);
+  shuffleOrder.splice(Math.max(0, shuffleOrder.indexOf(currentToken) + 1), 0, token);
+  renderQueue();
+  toast('已加入下一首播放');
+}
+
+function removeFromQueue(token) {
+  if (token === currentToken) return;
+  activeQueue = activeQueue.filter(id => id !== token);
+  shuffleOrder = shuffleOrder.filter(id => id !== token);
+  renderQueue();
+  pruneTracks();
+}
+
+function renderQueue() {
+  const list = $('#queueList');
+  list.replaceChildren();
+  const order = shuffleEnabled ? shuffleOrder : activeQueue;
+  $('#queueCount').textContent = order.length;
+  if (!order.length) { list.innerHTML = '<li class="dl-empty">队列还是空的<br>播放一首歌曲，或将它加入下一首。</li>'; return; }
+  order.forEach(token => {
+    const t = tracks.get(token);
+    if (!t) return;
+    const item = document.createElement('li');
+    item.className = 'queue-item' + (token === currentToken ? ' current' : '');
+    item.innerHTML = `<button class="queue-play" aria-label="播放 ${esc(t.song_name)}"><span>${esc(t.song_name)}</span><small>${esc(t.singers)}</small></button><button class="queue-remove" aria-label="从队列移除 ${esc(t.song_name)}" ${token === currentToken ? 'disabled title="当前曲目会保留"' : ''}>${ICON_TRASH}</button>`;
+    item.querySelector('.queue-play').onclick = () => play(token);
+    item.querySelector('.queue-remove').onclick = () => removeFromQueue(token);
+    list.appendChild(item);
+  });
+}
+
+$('#shuffleBtn').onclick = () => {
+  shuffleEnabled = !shuffleEnabled;
+  if (shuffleEnabled) resetShuffle();
+  $('#shuffleBtn').setAttribute('aria-pressed', String(shuffleEnabled));
+  renderQueue();
+};
+$('#repeatBtn').onclick = () => {
+  repeatMode = { off: 'all', all: 'one', one: 'off' }[repeatMode];
+  const label = { off: '顺序播放', all: '列表循环', one: '单曲循环' }[repeatMode];
+  $('#repeatBtn').setAttribute('aria-label', label);
+  $('#repeatBtn').title = label;
+  $('#repeatBtn').dataset.mode = repeatMode;
+  $('#repeatBtn').setAttribute('aria-pressed', String(repeatMode !== 'off'));
+  toast(label);
+};
+$('#queueToggle').onclick = () => { renderQueue(); setPanel($('#queuePanel').classList.contains('open') ? null : 'queuePanel'); };
+$('#queueClose').onclick = () => setPanel(null);
+$('#clearQueue').onclick = () => {
+  activeQueue = currentToken ? [currentToken] : [];
+  resetShuffle(); renderQueue(); pruneTracks();
+};
 
 $('#playBtn').onclick = () => {
-  if (!currentToken) { if (queue.length) play(queue[0]); return; }
+  if (!currentToken) { const first = activeQueue[0] || queue[0]; if (first) play(first); return; }
   if (audio.paused) { if (audioCtx?.state === 'suspended') audioCtx.resume(); audio.play(); }
   else audio.pause();
 };
 $('#prevBtn').onclick = () => step(-1);
 $('#nextBtn').onclick = () => step(1);
-audio.addEventListener('ended', () => step(1));
+audio.addEventListener('ended', () => step(1, true));
 audio.addEventListener('play', () => syncPlayIcon(true));
 audio.addEventListener('pause', () => syncPlayIcon(false));
 
@@ -296,6 +471,7 @@ function syncPlayIcon(playing) {
   $('.ic-play').toggleAttribute('hidden', playing);
   $('.ic-pause').toggleAttribute('hidden', !playing);
   $('#playBtn').setAttribute('aria-label', playing ? '暂停' : '播放');
+  document.body.classList.toggle('audio-playing', playing);
 }
 
 /* time + seek */
@@ -451,7 +627,7 @@ function syncLyric(c) {
   }
 }
 function setPanel(name) {
-  [['lyricsPanel', 'lyricsToggle', 'lyricsClose'], ['dlDrawer', 'downloadsButton', 'dlClose']].forEach(([id, trigger, close]) => {
+  [['lyricsPanel', 'lyricsToggle', 'lyricsClose'], ['dlDrawer', 'downloadsButton', 'dlClose'], ['queuePanel', 'queueToggle', 'queueClose']].forEach(([id, trigger, close]) => {
     const open = name === id;
     const panel = $('#' + id);
     const restoreFocus = !open && panel.contains(document.activeElement);
@@ -478,16 +654,27 @@ fab.onclick = () => {
 $('#dlClose').onclick = () => setPanel(null);
 
 async function loadLibrary() {
+  const requestId = ++libraryRequestId;
   const list = $('#libraryList');
   try {
     const data = await fetch('/api/library').then(r => r.json());
+    if (requestId !== libraryRequestId) return;
     $('#downloadDir').textContent = data.directory;
-    libraryQueue.forEach(token => tracks.delete(token));
+    const validLocal = new Set(data.tracks.map(t => t.token));
+    for (const token of libraryQueue) {
+      if (!validLocal.has(token)) {
+        if (currentToken === token) clearLocalPlayback();
+        activeQueue = activeQueue.filter(id => id !== token);
+        shuffleOrder = shuffleOrder.filter(id => id !== token);
+        tracks.delete(token);
+      }
+    }
     libraryQueue = [];
     list.innerHTML = '';
     $('#libraryCount').textContent = data.tracks.length;
     if (!data.tracks.length) {
       list.innerHTML = '<li class="dl-empty">暂无已下载歌曲</li>';
+      renderQueue();
       return;
     }
     data.tracks.forEach(t => {
@@ -533,21 +720,26 @@ async function loadLibrary() {
       li.ondblclick = (e) => { if (!e.target.closest('button')) play(t.token, libraryQueue); };
       list.appendChild(li);
     });
+    renderQueue();
+    pruneTracks();
   } catch {
+    if (requestId !== libraryRequestId) return;
     list.innerHTML = '<li class="dl-empty">读取下载目录失败</li>';
   }
 }
 
 function clearLocalPlayback() {
+  activeQueue = activeQueue.filter(token => token !== currentToken);
+  shuffleOrder = shuffleOrder.filter(token => token !== currentToken);
   audio.pause();
   audio.removeAttribute('src');
   audio.load();
   currentToken = null;
-  activeQueue = queue;
   $('#player').dataset.empty = 'true';
   $('#npTitle').textContent = '未在播放';
   $('#npArtist').textContent = '选择一首歌开始';
   showNoLyrics();
+  renderQueue();
 }
 
 window.addEventListener('pywebviewready', async () => {
@@ -575,18 +767,27 @@ $('#chooseDownloadDir').onclick = async () => {
 
 async function startDownload(token, btn) {
   const t = tracks.get(token);
-  if (!t) return;
+  if (!t || downloadingTokens.has(token)) return false;
+  downloadingTokens.add(token);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    downloadingTokens.delete(token);
+    if (btn) btn.classList.remove('busy');
+  };
   if (btn) btn.classList.add('busy');
   try {
     const res = await fetch('/api/download', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token })
     }).then(r => r.json());
-    if (res.error) { toast(res.error); if (btn) btn.classList.remove('busy'); return; }
+    if (res.error || !res.download_id) { toast(res.error || '下载启动失败'); release(); return false; }
     const item = addDlItem(t);
-    trackDownload(res.download_id, item, btn);
+    trackDownload(res.download_id, item, btn, release);
+    return true;
   } catch {
-    toast('下载启动失败'); if (btn) btn.classList.remove('busy');
+    toast('下载启动失败'); release(); return false;
   }
 }
 
@@ -618,7 +819,7 @@ function removeDlItem(item) {
   }
 }
 
-function trackDownload(id, item, btn) {
+function trackDownload(id, item, btn, release = () => {}) {
   const es = new EventSource(`/api/download/${id}/progress`);
   item.querySelector('.dl-delete').onclick = async (e) => {
     if (!confirm('删除这个下载任务并清理临时文件？')) return;
@@ -631,6 +832,7 @@ function trackDownload(id, item, btn) {
         return;
       }
       es.close();
+      release();
       removeDlItem(item);
       if (btn) btn.classList.remove('busy');
       toast('下载任务已删除');
@@ -641,6 +843,7 @@ function trackDownload(id, item, btn) {
   };
   es.addEventListener('progress', (ev) => {
     const d = JSON.parse(ev.data);
+    item.classList.remove('error');
     const bar = item.querySelector('.dl-bar i');
     const prog = item.querySelector('.prog');
     const s = item.querySelector('.s');
@@ -648,7 +851,7 @@ function trackDownload(id, item, btn) {
       item.classList.add('error'); prog.textContent = '失败';
       s.textContent = (d.message || '').slice(0, 24);
       item.querySelector('.dl-delete').disabled = false;
-      es.close(); if (btn) btn.classList.remove('busy'); return;
+      es.close(); release(); if (btn) btn.classList.remove('busy'); return;
     }
     if (d.status === 'cancelling') {
       prog.textContent = '取消中…';
@@ -657,6 +860,7 @@ function trackDownload(id, item, btn) {
     }
     if (d.status === 'cancelled') {
       removeDlItem(item);
+      release();
       es.close(); if (btn) btn.classList.remove('busy');
       toast('下载任务已删除');
       return;
@@ -674,12 +878,17 @@ function trackDownload(id, item, btn) {
     if (d.status === 'downloading' && d.speed) s.textContent = mb(d.speed) + '/s';
     if (d.status === 'done') {
       removeDlItem(item);
+      release();
       loadLibrary();
       es.close(); if (btn) btn.classList.remove('busy');
       toast('下载完成：' + (d.name || ''));
     }
   });
-  es.onerror = () => { es.close(); if (btn) btn.classList.remove('busy'); };
+  es.onerror = () => {
+    item.classList.add('error');
+    item.querySelector('.prog').textContent = '进度连接中断，正在重连';
+    item.querySelector('.s').textContent = '请勿重复下载';
+  };
 }
 function mb(b) { return (b / 1048576).toFixed(1) + 'MB'; }
 
