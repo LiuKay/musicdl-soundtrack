@@ -12,6 +12,40 @@ import desktop
 
 
 class SearchCompatibilityTest(unittest.TestCase):
+    def test_music_clients_use_absolute_cache_workspace_from_read_only_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resources = Path(tmp, 'Resources')
+            resources.mkdir()
+            resources.chmod(0o555)
+            original_cwd = os.getcwd()
+            cache = Path(tmp, 'cache')
+
+            def build(**kwargs):
+                for cfg in kwargs['init_music_clients_cfg'].values():
+                    work_dir = Path(cfg.get('work_dir', 'musicdl_outputs'))
+                    self.assertTrue(work_dir.is_absolute())
+                    self.assertTrue(work_dir.is_relative_to(cache))
+                    work_dir.mkdir(parents=True, exist_ok=True)
+                return SimpleNamespace(music_clients={})
+
+            try:
+                os.chdir(resources)
+                with mock.patch.object(app, 'CACHE_DIR', str(cache)), \
+                        mock.patch.object(app.musicdl, 'MusicClient', side_effect=build):
+                    app.ClientManager()._build()
+                self.assertFalse((resources / 'musicdl_outputs').exists())
+            finally:
+                os.chdir(original_cwd)
+                resources.chmod(0o755)
+
+    def test_initialization_errors_are_distinct_and_do_not_expose_paths(self):
+        with mock.patch.object(app.MANAGER, 'client', side_effect=OSError('private path')):
+            events = list(app.search_stream('test', ['MiguMusicClient']))
+        error = next(event for event in events if event.startswith('event: source_error'))
+        data = json.loads(error.split('data: ', 1)[1])
+        self.assertEqual(data.get('code'), 'initialization_failed')
+        self.assertNotIn('private path', error)
+
     SOURCE_ORDER = [
         'MiguMusicClient',
         'NeteaseMusicClient',

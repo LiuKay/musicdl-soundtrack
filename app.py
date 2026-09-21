@@ -85,7 +85,11 @@ class ClientManager:
         self._mc = None
 
     def _build(self):
-        cfg = {s: {'search_size_per_source': SEARCH_SIZE_PER_SOURCE, 'disable_print': True}
+        # Frozen macOS apps can run from a read-only App Translocation volume.
+        # Each musicdl client creates its workspace even before searching.
+        workspace = os.path.join(os.path.abspath(CACHE_DIR), 'musicdl')
+        cfg = {s: {'search_size_per_source': SEARCH_SIZE_PER_SOURCE,
+                   'disable_print': True, 'work_dir': os.path.join(workspace, s)}
                for s in SUPPORTED_SOURCES}
         return musicdl.MusicClient(music_sources=list(SUPPORTED_SOURCES.keys()),
                                    init_music_clients_cfg=cfg)
@@ -284,7 +288,13 @@ def search_stream(keyword, sources):
 
     def run_source(source):
         try:
-            client = MANAGER.client(source)
+            try:
+                client = MANAGER.client(source)
+            except Exception:
+                app.logger.exception('Music source initialization failed: %s', source)
+                emit('source_error', {'source': source, 'code': 'initialization_failed',
+                                      'message': '音乐源初始化失败，请检查缓存目录权限或更新应用'})
+                return
             progress = _NullProgress()
             try:
                 search_urls = client._constructsearchurls(keyword=keyword, rule={}, request_overrides={})

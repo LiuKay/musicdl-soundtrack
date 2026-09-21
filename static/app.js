@@ -156,7 +156,7 @@ function runSearch() {
     if (searchES !== es) return;
     const d = JSON.parse(ev.data);
     pending.delete(d.source);
-    setSourceState(d.source, 'error', '连接失败，请重试');
+    setSourceState(d.source, 'error', sourceErrorMessage(d));
   });
   es.addEventListener('done', () => {
     if (searchES !== es) return;
@@ -180,6 +180,12 @@ function runSearch() {
     setStatus(false, count ? `共 ${count} 首` : '');
     if (count === 0) showSearchMessage('连接暂时中断', '请重新搜索，或切换音乐来源后再试。');
   };
+}
+
+function sourceErrorMessage(error) {
+  return error.code === 'initialization_failed'
+    ? '初始化失败，请检查缓存目录权限或更新应用'
+    : '连接失败，请重试';
 }
 
 function setSourceState(id, state, text) {

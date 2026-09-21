@@ -33,6 +33,12 @@ function helper(name, context = {}) {
   return vm.runInNewContext(`(${match[0]})`, context);
 }
 
+test('initialization failures are not mislabeled as network failures', () => {
+  const message = helper('sourceErrorMessage');
+  assert.match(message({ code: 'initialization_failed' }), /初始化失败/);
+  assert.match(message({}), /连接失败/);
+});
+
 test('play and pause SVGs use hidden attributes, never display both', () => {
   const nodes = Object.fromEntries(['.ic-play', '.ic-pause', '#playBtn'].map(id => [id, element()]));
   const sync = helper('syncPlayIcon', { $: id => nodes[id], document: { body: element() } });

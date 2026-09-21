@@ -30,6 +30,59 @@ jobs:
           python -m venv .venv
           .venv/bin/python -m pip install -r requirements.txt
           make app
+      - name: Regression tests
+        run: .venv/bin/python -m unittest -v test_app.py
+      - name: Test packaged app with read-only resources
+        run: |
+          .venv/bin/python - <<'PY'
+          import os
+          import re
+          import subprocess
+          import tempfile
+          import time
+          from pathlib import Path
+          import requests
+
+          bundle = Path('dist/Soundtrack.app').resolve()
+          resources = bundle / 'Contents/Resources'
+          original_mode = resources.stat().st_mode
+          with tempfile.TemporaryDirectory() as temp:
+              env = dict(os.environ, SOUNDTRACK_DOWNLOAD_DIR=temp + '/downloads',
+                         SOUNDTRACK_CACHE_DIR=temp + '/cache')
+              process = None
+              try:
+                  resources.chmod(0o555)
+                  process = subprocess.Popen([str(bundle / 'Contents/MacOS/Soundtrack')], env=env)
+                  port = None
+                  for _ in range(45):
+                      if process.poll() is not None:
+                          raise RuntimeError('Packaged app exited before search test')
+                      result = subprocess.run(['lsof', '-nP', '-a', '-p', str(process.pid),
+                                               '-iTCP', '-sTCP:LISTEN'], capture_output=True, text=True)
+                      match = re.search(r'127\.0\.0\.1:(\d+)', result.stdout)
+                      if match:
+                          port = match.group(1)
+                          break
+                      time.sleep(1)
+                  assert port, 'Packaged app did not start its local server'
+                  response = requests.get(f'http://127.0.0.1:{port}/api/search',
+                                          params={'q': 'test', 'sources': 'MiguMusicClient'}, timeout=60)
+                  response.raise_for_status()
+                  assert 'event: source_error' not in response.text, response.text
+                  assert 'event: source_done' in response.text, response.text
+                  assert (Path(temp) / 'cache/musicdl').is_dir(), 'Missing writable musicdl workspace'
+                  print('Packaged app initialized sources from read-only Resources; search completed.')
+                  print('Live result count:', response.text.count('event: result'))
+              finally:
+                  if process is not None:
+                      process.terminate()
+                      try:
+                          process.wait(timeout=10)
+                      except subprocess.TimeoutExpired:
+                          process.kill()
+                          process.wait(timeout=10)
+                  resources.chmod(original_mode)
+          PY
       - name: Package
         run: ditto -c -k --sequesterRsrc --keepParent dist/Soundtrack.app "Soundtrack-macOS-${RELEASE_TAG}.zip"
       # ponytail: the Release asset is enough; do not duplicate it as an Actions artifact.
