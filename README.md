@@ -60,6 +60,8 @@ py -m venv .venv
 - 播放条支持随机、顺序、列表循环和单曲循环；单曲循环只影响自然播完，手动切歌仍切到相邻曲目。
 - 右下角队列按钮可查看、播放、移除待播曲目，或清空待播并保留当前歌曲。队列和播放模式目前仅在当前页面会话中保留，刷新后重置。
 - 每行提供播放、下一首播放和下载按钮，双击歌曲行也可播放。
+- 点击下载或「下载所选」先选择格式：MP3 始终显示，FLAC 仅在全部所选歌曲的原始格式为 FLAC 时显示。默认选 MP3；取消弹窗不会创建任务。
+- 原始 MP3/FLAC 按对应格式直接下载；其他音频下载后可转为 320 kbps MP3，不提供转 FLAC。转换不会提升原始音质，缓存命中也执行相同格式检查。任务显示检测、等待转换、转换和保存状态；同时最多转换一首，取消会清理临时文件。重复下载保留已有音频并使用不同文件名。
 - 底部播放条：上一首 / 播放暂停 / 下一首、进度拖动、音量、实时频谱。
 - “边听边存”可缓存播放过的歌曲，并按 512 MB–5 GB 的容量上限自动清理最旧缓存。
 - 下载面板可把同时下载数量设置为 1–5 首，超出的任务按点击顺序等待。
@@ -70,6 +72,8 @@ py -m venv .venv
 
 ![独立播放队列：查看待播曲目、移除歌曲或清空待播](docs/interface-queue.webp)
 
+![下载格式选择：仅原始 FLAC 音源显示 FLAC 选项（本地测试素材）](docs/download-format-desktop.jpg)
+
 队列与搜索结果分开管理，可以一边听当前列表，一边继续搜索。收藏、跨会话队列恢复和歌单链接导入尚未提供。
 
 ## 验证界面
@@ -77,6 +81,7 @@ py -m venv .venv
 ```bash
 node --test test_ui.cjs
 python -m unittest -v test_app.py
+python -m unittest -v test_audio_formats.py
 ```
 
 前端回归测试不需要额外 Node.js 依赖，覆盖队列隔离、循环/随机、批量选择、重复下载防护、异步响应竞争、面板和键盘操作。真实音乐源仍需联网手动验证。
@@ -101,7 +106,9 @@ docs/             Pages 展示页与界面截图，不包含在线搜索或下�
 
 目前没有账号登录或 Cookie 配置界面。开发者可参照 musicdl 文档，在 `ClientManager._build()` 中配置自己有权使用的来源参数；这不保证特定曲目、会员音质或受保护格式可用，也不要将凭据提交到仓库。
 
-Soundtrack 使用 musicdl 在搜索阶段解析出的直接音频 URL，通过自己的 HTTP 流程播放和下载，不调用来源专用的 musicdl `_download`。目前不实现专用媒体解密、HLS 分片合并或转码，也不提供下载任务的跨重启恢复和断点续传。Apple Music、Deezer、Joox、千千音乐、Qobuz、SoundCloud、StreetVoice、汽水音乐和 TIDAL 尚未接入；界面借鉴 Apple Music 的视觉风格，不代表接入了 Apple Music 服务。
+MP3 转换需要在运行应用的电脑安装 FFmpeg（含 FFprobe，且带 `libmp3lame` 编码器）。通过 PATH 或 macOS Homebrew 路径自动查找，也可用 `SOUNDTRACK_FFMPEG` / `SOUNDTRACK_FFPROBE` 指定可执行文件路径。桌面安装包不内置这两个工具；缺少工具时仍可直接下载原始 MP3/FLAC，需转换的 MP3 选项会禁用。真实音频转换测试在未安装工具时跳过。
+
+Soundtrack 使用 musicdl 在搜索阶段解析出的直接音频 URL，通过自己的 HTTP 流程播放和下载，不调用来源专用的 musicdl `_download`。支持本地转 MP3，但不实现专用媒体解密、HLS 分片合并，也不提供下载任务的跨重启恢复和断点续传。Apple Music、Deezer、Joox、千千音乐、Qobuz、SoundCloud、StreetVoice、汽水音乐和 TIDAL 尚未接入；界面借鉴 Apple Music 的视觉风格，不代表接入了 Apple Music 服务。
 
 ## 致谢
 

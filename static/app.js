@@ -16,6 +16,7 @@ let repeatMode = 'off';            // off | all | one
 const selectedTokens = new Set();
 const downloadingTokens = new Set();
 const batchTokens = new Set();
+const formatTokens = new Set();
 const sourceStates = new Map();
 let batchDownloading = false;
 let currentToken = null;
@@ -206,7 +207,7 @@ function renderSourceStates() {
 }
 
 function pruneTracks() {
-  const keep = new Set([...queue, ...activeQueue, ...libraryQueue, ...downloadingTokens, ...batchTokens, currentToken]);
+  const keep = new Set([...queue, ...activeQueue, ...libraryQueue, ...downloadingTokens, ...batchTokens, ...formatTokens, currentToken]);
   for (const token of tracks.keys()) { if (!keep.has(token)) tracks.delete(token); }
 }
 
@@ -228,13 +229,17 @@ $('#selectAll').onchange = e => {
 async function downloadSelected() {
   if (batchDownloading) return;
   const tokens = queue.filter(token => selectedTokens.has(token));
+  if (!tokens.length) return;
   batchDownloading = true;
   tokens.forEach(token => batchTokens.add(token));
   updateSelection();
   let started = 0;
+  let format = null;
   try {
+    format = await chooseDownloadFormat(tokens);
+    if (!format) return;
     for (const token of tokens) {
-      if (await startDownload(token)) { started++; selectedTokens.delete(token); }
+      if (await startDownload(token, null, format)) { started++; selectedTokens.delete(token); }
     }
   } finally {
     batchTokens.clear();
@@ -242,7 +247,7 @@ async function downloadSelected() {
     document.querySelectorAll('.row').forEach(row => { row.querySelector('.row-select').checked = selectedTokens.has(row.dataset.token); });
     updateSelection();
     pruneTracks();
-    toast(`已添加 ${started} / ${tokens.length} 首到下载任务`);
+    if (format) toast(`已添加 ${started} / ${tokens.length} 首到下载任务`);
   }
 }
 $('#downloadSelected').onclick = downloadSelected;
@@ -299,7 +304,7 @@ function addRow(t) {
       <button class="a-dl" title="下载" aria-label="下载 ${esc(t.song_name)}">${ICON_DL}</button>
     </div>`;
   li.querySelector('.a-play').onclick = (e) => { e.stopPropagation(); play(t.token); };
-  li.querySelector('.a-dl').onclick = (e) => { e.stopPropagation(); startDownload(t.token, e.currentTarget); };
+  li.querySelector('.a-dl').onclick = (e) => { e.stopPropagation(); requestDownload(t.token, e.currentTarget); };
   li.querySelector('.a-next').onclick = () => enqueueNext(t.token);
   li.querySelector('.row-select').onchange = e => {
     e.target.checked ? selectedTokens.add(t.token) : selectedTokens.delete(t.token);
@@ -698,15 +703,12 @@ async function loadLibrary() {
         <button class="library-reveal" type="button" aria-label="在文件夹中显示 ${esc(t.song_name)}" ${desktopReady ? '' : 'hidden'}>${ICON_FOLDER}</button>
         <button class="library-delete" type="button" aria-label="删除 ${esc(t.song_name)}">${ICON_TRASH}</button>`;
       li.querySelector('.library-play').onclick = () => play(t.token, libraryQueue);
-      li.querySelector('.library-reveal').onclick = async (e) => {
-        e.currentTarget.disabled = true;
+      li.querySelector('.library-reveal').onclick = async () => {
         try {
           const revealed = await window.pywebview.api.reveal_downloaded_file(t.relative);
           if (!revealed) throw new Error();
         } catch {
           toast('无法定位文件');
-        } finally {
-          e.currentTarget.disabled = false;
         }
       };
       li.querySelector('.library-delete').onclick = async (e) => {
@@ -771,7 +773,72 @@ $('#chooseDownloadDir').onclick = async () => {
   }
 };
 
-async function startDownload(token, btn) {
+function originalFormat(track) {
+  return String(track?.ext || '').toLowerCase().replace(/^\./, '');
+}
+
+$('#downloadFormatClose').onclick = $('#downloadFormatCancel').onclick = () => $('#downloadFormatDialog').close('cancel');
+
+async function chooseDownloadFormat(tokens) {
+  const dialog = $('#downloadFormatDialog');
+  if (dialog.open || !tokens.length || tokens.some(token => !tracks.has(token))) return null;
+  const songs = tokens.map(token => tracks.get(token));
+  const hasFlac = songs.every(song => originalFormat(song) === 'flac');
+  const needsConversion = songs.some(song => originalFormat(song) !== 'mp3');
+  const mp3 = $('#downloadFormatMp3'), flac = $('#downloadFormatFlac');
+  $('#downloadFormatFlacOption').hidden = !hasFlac;
+  flac.disabled = !hasFlac;
+  mp3.checked = true;
+  flac.checked = false;
+  mp3.disabled = needsConversion;
+  $('#downloadFormatTrack').textContent = songs.length === 1
+    ? `${songs[0].song_name} · ${songs[0].singers}` : `已选 ${songs.length} 首歌曲 · 使用同一种下载格式`;
+  let capability = needsConversion ? null : true;
+  const update = () => {
+    $('#downloadFormatConfirm').disabled = mp3.checked && mp3.disabled;
+    $('#downloadFormatHelp').textContent = flac.checked ? '直接下载原始 FLAC，保留音质。'
+      : !needsConversion ? '直接下载原始 MP3，不重新编码。'
+      : capability === null ? '正在检查本机转换工具…'
+      : capability ? '非 MP3 音频将转换为 320 kbps MP3；转换不会提升原始音质。'
+      : 'MP3 转换不可用，请确认已安装 FFmpeg 和 FFprobe 后重试。';
+  };
+  mp3.onchange = flac.onchange = update;
+  update();
+  tokens.forEach(token => formatTokens.add(token));
+  dialog.returnValue = '';
+  return new Promise(resolve => {
+    let active = true;
+    dialog.addEventListener('close', () => {
+      active = false;
+      tokens.forEach(token => formatTokens.delete(token));
+      const format = flac.checked ? 'flac' : 'mp3';
+      resolve(dialog.returnValue === 'download' && !(format === 'mp3' && mp3.disabled) ? format : null);
+    }, { once: true });
+    dialog.showModal();
+    if (!needsConversion) return;
+    fetch('/api/download/formats').then(response => {
+      if (!response.ok) throw new Error();
+      return response.json();
+    }).then(data => {
+      if (!active) return;
+      capability = data.mp3_conversion === true;
+      mp3.disabled = !capability;
+      update();
+    }).catch(() => {
+      if (!active) return;
+      capability = false;
+      update();
+    });
+  });
+}
+
+async function requestDownload(token, btn) {
+  if (downloadingTokens.has(token)) return;
+  const format = await chooseDownloadFormat([token]);
+  if (format) await startDownload(token, btn, format);
+}
+
+async function startDownload(token, btn, format = 'mp3') {
   const t = tracks.get(token);
   if (!t || downloadingTokens.has(token)) return false;
   downloadingTokens.add(token);
@@ -786,10 +853,10 @@ async function startDownload(token, btn) {
   try {
     const res = await fetch('/api/download', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token })
+      body: JSON.stringify({ token, format })
     }).then(r => r.json());
     if (res.error || !res.download_id) { toast(res.error || '下载启动失败'); release(); return false; }
-    const item = addDlItem(t);
+    const item = addDlItem({ ...t, song_name: `${t.song_name} · ${format.toUpperCase()}` });
     trackDownload(res.download_id, item, btn, release);
     return true;
   } catch {
@@ -877,6 +944,14 @@ function trackDownload(id, item, btn, release = () => {}) {
       s.textContent = '';
       return;
     }
+    if (['checking', 'waiting_conversion', 'converting', 'tagging'].includes(d.status)) {
+      const labels = { checking: '检测格式…', waiting_conversion: '等待转换…', converting: '转换为 MP3…', tagging: '保存歌曲信息…' };
+      prog.textContent = labels[d.status];
+      const pct = Math.floor(d.conversion_progress || 0);
+      bar.style.width = (d.status === 'converting' ? pct : 0) + '%';
+      s.textContent = d.status === 'converting' && pct ? `${pct}%` : '';
+      return;
+    }
     const total = d.total || 0, done = d.downloaded || 0;
     const pct = total ? Math.min(100, done / total * 100) : 0;
     bar.style.width = (total ? pct : 8) + '%';
@@ -907,6 +982,7 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
 }
 function handleShortcuts(e) {
+  if (e.target.closest('dialog')) return;
   if (e.key === 'Escape') setPanel(null);
   if (e.target.closest('input, select, textarea, [contenteditable="true"]')) return;
   if (e.altKey && ['ArrowRight', 'ArrowLeft'].includes(e.code)) {

@@ -32,6 +32,7 @@ from flask import (
 
 from musicdl import musicdl
 from musicdl.modules import SongInfoUtils
+import audio_formats
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +400,7 @@ DOWNLOAD_CONCURRENCY = 3
 DOWNLOAD_ACTIVE = 0
 DOWNLOAD_PENDING = deque()
 DOWNLOAD_QUEUE_LOCK = threading.Lock()
+TRANSCODE_LOCK = threading.Lock()
 
 
 def _safe_name(name):
@@ -433,6 +435,8 @@ def _save_download_metadata(path, entry):
         'singers': str(getattr(song, 'singers', '') or ''),
         'album': str(getattr(song, 'album', '') or ''),
         'duration': str(getattr(song, 'duration', '') or ''),
+        'source_format': str(getattr(song, 'ext', '') or '').lower().lstrip('.'),
+        'format': Path(path).suffix.lower().lstrip('.'),
     }
     for suffix in ('', *COVER_MIME_SUFFIXES.values()):
         try:
@@ -485,6 +489,7 @@ def _save_download_metadata(path, entry):
     try:
         tag_song = copy(song)
         tag_song.save_path = path
+        tag_song.ext = Path(path).suffix.lstrip('.')
         tag_song.cover_url = _existing_download_cover(path, metadata) or ''
         SongInfoUtils.savelyricsthenwritetagstoaudio(
             tag_song, overwrite=True, timeout=10,
@@ -540,6 +545,48 @@ def _read_download_lyric(path):
         return ''
 
 
+def _finish_download(download_id, entry, tmp, path):
+    target = _get_dl(download_id).get('format')
+    converted = tmp + '.mp3'
+    check = lambda: _check_download_cancelled(download_id)
+    try:
+        check()
+        if target:
+            _set_dl(download_id, status='checking', speed=0)
+            actual, duration = audio_formats.inspect_audio(tmp, check)
+            if target == 'flac' and actual != 'flac':
+                raise ValueError('原始音频不是 FLAC，请选择 MP3')
+            if actual != target:
+                if not audio_formats.can_convert():
+                    raise ValueError('转换需要安装 FFmpeg 和 FFprobe')
+                _set_dl(download_id, status='waiting_conversion')
+                while not TRANSCODE_LOCK.acquire(timeout=.2):
+                    check()
+                try:
+                    check()
+                    _set_dl(download_id, status='converting', conversion_progress=0)
+                    audio_formats.convert_mp3(
+                        tmp, converted, duration, check,
+                        lambda value: _set_dl(download_id, conversion_progress=value),
+                    )
+                    os.replace(converted, tmp)
+                finally:
+                    TRANSCODE_LOCK.release()
+        check()
+        _publish_download(download_id, tmp, path)
+        _set_dl(download_id, status='tagging')
+        _save_download_metadata(path, entry)
+        check()
+        size = os.path.getsize(path)
+        _set_dl(download_id, status='done', downloaded=size, total=size,
+                speed=0, name=os.path.basename(path), path=path)
+    finally:
+        try:
+            os.remove(converted)
+        except FileNotFoundError:
+            pass
+
+
 def run_download(download_id, token):
     entry = REGISTRY.get(token)
     if not entry:
@@ -550,9 +597,19 @@ def run_download(download_id, token):
     download_root = os.path.realpath(DOWNLOAD_DIR)
     sub = os.path.join(download_root, SUPPORTED_SOURCES.get(source, {}).get('short', source))
     os.makedirs(sub, exist_ok=True)
-    ext = (str(song.ext) or 'mp3').lstrip('.')
+    target = _get_dl(download_id).get('format')
+    ext = target or re.sub(r'[^a-z0-9]', '', str(song.ext).lower()) or 'mp3'
     fname = f"{_safe_name(str(song.song_name))} - {_safe_name(str(song.singers))}.{ext}"
     path = os.path.join(sub, fname)
+    # Reserve a distinct output for explicit-format tasks; never replace a song.
+    with DL_LOCK:
+        if target and (any(os.path.lexists(str(Path(path).with_suffix('.' + suffix)))
+                           for suffix in (*RESULT_EXT_TO_MIME, 'lrc')) or any(
+                rec.get('path') and Path(rec['path']).with_suffix('') == Path(path).with_suffix('')
+                for rec in DOWNLOADS.values())):
+            path = os.path.join(sub, f'{Path(fname).stem} - {download_id}.{ext}')
+            fname = os.path.basename(path)
+        DOWNLOADS.setdefault(download_id, {})['path'] = path
     tmp = path + f'.{download_id}.part'
     _set_dl(download_id, name=fname, path=path, tmp_path=tmp,
             download_root=download_root, published=False)
@@ -569,7 +626,6 @@ def run_download(download_id, token):
                 shutil.copy2(cached, tmp)
                 _check_download_cancelled(download_id)
                 os.utime(cached)
-                _publish_download(download_id, tmp, path)
     except InterruptedError:
         raise
     except OSError:
@@ -579,10 +635,15 @@ def run_download(download_id, token):
         except OSError:
             pass
     if cached_total is not None:
-        _save_download_metadata(path, entry)
-        _check_download_cancelled(download_id)
-        _set_dl(download_id, status='done', downloaded=cached_total,
-                total=cached_total, speed=0, name=fname, path=path)
+        try:
+            _finish_download(download_id, entry, tmp, path)
+        except InterruptedError:
+            pass
+        except Exception as err:
+            _set_dl(download_id, status='error', message=str(err))
+        finally:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
         return
 
     _check_download_cancelled(download_id)
@@ -615,15 +676,14 @@ def run_download(download_id, token):
                         _set_dl(download_id, downloaded=done, total=total, speed=speed)
                         last, last_bytes = now, done
             _check_download_cancelled(download_id)
-            _publish_download(download_id, tmp, path)
-            _save_download_metadata(path, entry)
-            _check_download_cancelled(download_id)
-            _set_dl(download_id, status='done', downloaded=done,
-                    total=total or done, speed=0, name=fname, path=path)
+            _finish_download(download_id, entry, tmp, path)
     except InterruptedError:
         pass
     except Exception as err:
         _set_dl(download_id, status='error', message=str(err))
+    finally:
+        if os.path.isfile(tmp):
+            os.remove(tmp)
 
 
 def _set_dl(download_id, **fields):
@@ -1010,14 +1070,30 @@ def api_lyric(token):
 @app.route('/api/download', methods=['POST'])
 def api_download():
     data = request.get_json(force=True, silent=True) or {}
+    if not isinstance(data, dict) or not isinstance(data.get('token'), str):
+        return jsonify({'error': '无效的下载请求'}), 400
     token = data.get('token')
     entry = REGISTRY.get(token)
     if not entry:
         return jsonify({'error': '曲目已过期，请重新搜索'}), 404
+    target = data.get('format')
+    if 'format' in data:
+        if target not in ('mp3', 'flac'):
+            return jsonify({'error': '仅支持 MP3 和原始 FLAC'}), 400
+        original = str(entry['song_info'].ext or '').lower().lstrip('.')
+        if target == 'flac' and original != 'flac':
+            return jsonify({'error': '该曲目没有原始 FLAC'}), 400
+        if target == 'mp3' and original != 'mp3' and not audio_formats.can_convert():
+            return jsonify({'error': '转换需要安装 FFmpeg 和 FFprobe'}), 503
     download_id = uuid.uuid4().hex[:16]
-    _set_dl(download_id, name=str(entry['song_info'].song_name))
+    _set_dl(download_id, name=str(entry['song_info'].song_name), format=target)
     _enqueue_download(download_id, token)
     return jsonify({'download_id': download_id})
+
+
+@app.route('/api/download/formats')
+def api_download_formats():
+    return jsonify({'mp3_conversion': audio_formats.can_convert()})
 
 
 @app.route('/api/download/concurrency', methods=['GET', 'POST'])

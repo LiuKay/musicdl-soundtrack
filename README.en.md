@@ -70,6 +70,8 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run 
 - The player supports shuffle, sequential play, repeat-all, and repeat-one. Repeat-one applies at the natural end of a song; manual next/previous still changes tracks.
 - The bottom-right queue button lets you inspect, play, remove, or clear queued tracks while retaining the current song. Playback queues and modes are session-only and reset on page reload.
 - Each row offers play, play-next, and download buttons. Double-clicking a song row also plays it.
+- Download buttons and batch downloads first open a format dialog: MP3 is always shown; FLAC appears only when every selected track is originally FLAC. MP3 is selected by default. Cancelling creates no tasks.
+- Original MP3/FLAC audio is downloaded directly in its matching format. Other audio can be converted to 320 kbps MP3, never to FLAC; conversion does not improve source quality. Cached audio follows the same checks. Tasks show inspection, conversion waiting/progress, and metadata saving. Only one conversion runs at a time; cancellation cleans temporary files. Repeated downloads preserve existing audio under distinct filenames.
 - Bottom player bar: previous / play-pause / next, seek, volume, live spectrum.
 - “Cache while playing” keeps listened tracks locally and removes the oldest cache files when the selected 512 MB–5 GB limit is exceeded.
 - The download drawer can run 1–5 downloads at once; additional tasks wait in click order.
@@ -80,6 +82,8 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run 
 
 ![Independent playback queue with track removal and a clear-upcoming action](docs/interface-queue.webp)
 
+![Download format dialog: FLAC is offered only for original FLAC sources (local test audio)](docs/download-format-desktop.jpg)
+
 You can keep listening to the current queue while searching for other music. Favorites, cross-session queue restoration, and playlist-link import are not yet available.
 
 ## UI verification
@@ -87,6 +91,7 @@ You can keep listening to the current queue while searching for other music. Fav
 ```bash
 node --test test_ui.cjs
 python -m unittest -v test_app.py
+python -m unittest -v test_audio_formats.py
 ```
 
 Frontend regression tests need no extra Node.js packages and cover queue isolation, repeat/shuffle, batch selection, duplicate-download guards, stale responses, drawers, and keyboard controls. Live music providers still require manual online verification.
@@ -111,7 +116,9 @@ Constants at the top of `app.py`:
 
 There is no login or Cookie settings interface. Developers can configure authorized source parameters in `ClientManager._build()` using the musicdl documentation. This does not guarantee access to a track, subscription quality, or protected format. Do not commit credentials.
 
-Soundtrack plays and downloads direct audio URLs resolved by musicdl through its own HTTP flow, not the source-specific musicdl `_download` flow. It does not implement media decryption, HLS merging, transcoding, download-task recovery after a restart, or resumable downloads. Apple Music, Deezer, Joox, Qianqian, Qobuz, SoundCloud, StreetVoice, Soda Music, and TIDAL are not integrated. The Apple Music-inspired appearance does not imply access to the Apple Music service.
+MP3 conversion requires FFmpeg with FFprobe and the `libmp3lame` encoder on the computer running the app. Tools are detected through PATH or macOS Homebrew locations; `SOUNDTRACK_FFMPEG` / `SOUNDTRACK_FFPROBE` can override executable paths. Desktop packages do not bundle these tools. Without them, native MP3/FLAC downloads still work, but MP3 choices requiring conversion are disabled. Real audio conversion tests are skipped if the tools are unavailable.
+
+Soundtrack plays and downloads direct audio URLs resolved by musicdl through its own HTTP flow, not the source-specific musicdl `_download` flow. It supports local MP3 conversion but does not implement media decryption, HLS merging, download-task recovery after a restart, or resumable downloads. Apple Music, Deezer, Joox, Qianqian, Qobuz, SoundCloud, StreetVoice, Soda Music, and TIDAL are not integrated. The Apple Music-inspired appearance does not imply access to the Apple Music service.
 
 ## Credits
 

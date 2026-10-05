@@ -171,6 +171,19 @@
   <button class="queue-toggle" id="queueToggle" aria-label="显示播放队列" aria-controls="queuePanel" aria-expanded="false" title="播放队列"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9 6h12M9 12h12M9 18h12M3 6h1M3 12h1M3 18h1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
 </footer>
 
+<dialog class="format-dialog" id="downloadFormatDialog" aria-labelledby="downloadFormatTitle" aria-describedby="downloadFormatTrack downloadFormatHelp">
+  <form method="dialog" id="downloadFormatForm">
+    <div class="format-heading"><h2 id="downloadFormatTitle">下载音乐</h2><button type="button" id="downloadFormatClose" aria-label="关闭格式选择">✕</button></div>
+    <p class="format-track" id="downloadFormatTrack"></p>
+    <fieldset class="format-options">
+      <legend>选择格式</legend>
+      <label><input type="radio" name="downloadFormat" id="downloadFormatMp3" value="mp3" checked><span><strong>MP3</strong><small>兼容常用播放器</small></span></label>
+      <label id="downloadFormatFlacOption" hidden><input type="radio" name="downloadFormat" id="downloadFormatFlac" value="flac"><span><strong>FLAC</strong><small>原始无损文件 · 不转码</small></span></label>
+    </fieldset>
+    <p class="format-help" id="downloadFormatHelp" role="status"></p>
+    <div class="format-actions"><button type="button" id="downloadFormatCancel">取消</button><button class="format-confirm" id="downloadFormatConfirm" value="download">下载</button></div>
+  </form>
+</dialog>
 <audio id="audio" crossorigin="anonymous"></audio>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="/static/app.js"></script>

@@ -33,6 +33,57 @@ function helper(name, context = {}) {
   return vm.runInNewContext(`(${match[0]})`, context);
 }
 
+function revealHandler(reveal, toast = () => {}) {
+  const match = source.match(/li\.querySelector\('\.library-reveal'\)\.onclick = (async \([^)]*\) => \{[^]*?\n      \});/);
+  assert.ok(match, 'library reveal handler is present');
+  return vm.runInNewContext(`(${match[1]})`, {
+    t: { relative: 'Migu/歌曲.mp3' }, toast,
+    window: { pywebview: { api: { reveal_downloaded_file: reveal } } }
+  });
+}
+
+test('reveal button stays enabled while desktop call is pending', async () => {
+  let finish;
+  const handler = revealHandler(() => new Promise(resolve => { finish = resolve; }));
+  const button = { disabled: false };
+  const event = { currentTarget: button };
+  const pending = handler(event);
+  const disabledDuringCall = button.disabled;
+  event.currentTarget = null; // DOM clears currentTarget after synchronous dispatch.
+  finish(true);
+  await pending;
+  assert.equal(disabledDuringCall, false);
+  assert.equal(button.disabled, false);
+});
+
+test('reveal supports repeated clicks without locking the button', async () => {
+  const calls = [];
+  const handler = revealHandler(async relative => { calls.push(relative); return true; });
+  const button = { disabled: false };
+  for (let i = 0; i < 2; i++) {
+    const event = { currentTarget: button };
+    const pending = handler(event);
+    event.currentTarget = null;
+    await pending;
+  }
+  assert.deepEqual(calls, ['Migu/歌曲.mp3', 'Migu/歌曲.mp3']);
+  assert.equal(button.disabled, false);
+});
+
+test('reveal failures show feedback and leave the button usable', async () => {
+  for (const reveal of [async () => false, async () => { throw Error('bridge failure'); }]) {
+    const messages = [];
+    const handler = revealHandler(reveal, message => messages.push(message));
+    const button = { disabled: false };
+    const event = { currentTarget: button };
+    const pending = handler(event);
+    event.currentTarget = null;
+    await pending;
+    assert.deepEqual(messages, ['无法定位文件']);
+    assert.equal(button.disabled, false);
+  }
+});
+
 test('initialization failures are not mislabeled as network failures', () => {
   const message = helper('sourceErrorMessage');
   assert.match(message({ code: 'initialization_failed' }), /初始化失败/);
@@ -150,11 +201,11 @@ test('searching again preserves tracks referenced by the current playback queue'
 });
 
 test('track pruning retains search, playback, current song and active batch references', () => {
-  const tracks = new Map(['search', 'play', 'current', 'download', 'batch', 'library', 'stale'].map(t => [t, {}]));
+  const tracks = new Map(['search', 'play', 'current', 'download', 'batch', 'library', 'format', 'stale'].map(t => [t, {}]));
   helper('pruneTracks', { tracks, queue: ['search'], activeQueue: ['play'], libraryQueue: ['library'],
-    currentToken: 'current', downloadingTokens: new Set(['download']), batchTokens: new Set(['batch']) })();
+    currentToken: 'current', downloadingTokens: new Set(['download']), batchTokens: new Set(['batch']), formatTokens: new Set(['format']) })();
   assert.equal(tracks.has('stale'), false);
-  assert.equal(tracks.size, 6);
+  assert.equal(tracks.size, 7);
 });
 
 test('repeat off stops, repeat all wraps, and repeat one applies only to automatic advance', () => {
@@ -210,6 +261,7 @@ test('batch download snapshots selection, handles failures, and releases protect
   const batch = new Set();
   const started = [];
   const context = vm.createContext({ queue: ['a', 'b'], selectedTokens: selected, batchTokens: batch, batchDownloading: false,
+    chooseDownloadFormat: async () => 'mp3',
     updateSelection() {}, pruneTracks() {}, toast() {}, document: { querySelectorAll: () => [] },
     startDownload: async token => { assert.equal(batch.size, 2); started.push(token); return token === 'a'; }
   });
@@ -219,6 +271,96 @@ test('batch download snapshots selection, handles failures, and releases protect
   assert.deepEqual([...selected], ['b']);
   assert.equal(batch.size, 0);
   assert.equal(context.batchDownloading, false);
+});
+
+function formatDialogHarness(exts, capability = true) {
+  const nodes = new Map();
+  const $ = id => {
+    if (!nodes.has(id)) nodes.set(id, element());
+    return nodes.get(id);
+  };
+  const dialog = $('#downloadFormatDialog');
+  dialog.showModal = () => { dialog.open = true; };
+  const tokens = exts.map((_, i) => String(i));
+  const formatTokens = new Set();
+  const choose = helper('chooseDownloadFormat', {
+    $, tracks: new Map(exts.map((ext, i) => [String(i), { ext, song_name: 'Song', singers: 'Artist' }])),
+    originalFormat: helper('originalFormat'), formatTokens,
+    fetch: async () => ({ ok: true, json: async () => ({ mp3_conversion: capability }) })
+  });
+  const close = value => {
+    dialog.returnValue = value; dialog.open = false; dialog.listeners.close();
+  };
+  return { $, choose, tokens, close, formatTokens };
+}
+
+test('FLAC is offered only for wholly original FLAC selections', async () => {
+  for (const [exts, visible] of [[['flac'], true], [['.FLAC', 'flac'], true], [['mp3'], false], [['flac', 'mp3'], false], [['wav'], false]]) {
+    const h = formatDialogHarness(exts);
+    const result = h.choose(h.tokens);
+    assert.equal(h.$('#downloadFormatFlacOption').hidden, !visible);
+    assert.equal(h.formatTokens.size, exts.length);
+    h.close('cancel');
+    assert.equal(await result, null);
+    assert.equal(h.formatTokens.size, 0);
+  }
+});
+
+test('native MP3 remains enabled without conversion tools and cancel starts nothing', async () => {
+  const h = formatDialogHarness(['mp3'], false);
+  const result = h.choose(h.tokens);
+  assert.equal(h.$('#downloadFormatMp3').disabled, false);
+  assert.equal(h.$('#downloadFormatConfirm').disabled, false);
+  h.close('download');
+  assert.equal(await result, 'mp3');
+  let started = false;
+  await helper('requestDownload', {
+    downloadingTokens: new Set(), chooseDownloadFormat: async () => null,
+    startDownload: async () => { started = true; }
+  })('track');
+  assert.equal(started, false);
+});
+
+test('missing conversion tools disable MP3 but leave native FLAC usable', async () => {
+  const h = formatDialogHarness(['flac'], false);
+  const result = h.choose(h.tokens);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.$('#downloadFormatMp3').disabled, true);
+  assert.equal(h.$('#downloadFormatFlac').disabled, false);
+  h.$('#downloadFormatMp3').checked = false;
+  h.$('#downloadFormatFlac').checked = true;
+  h.$('#downloadFormatFlac').onchange();
+  assert.equal(h.$('#downloadFormatConfirm').disabled, false);
+  h.close('download');
+  assert.equal(await result, 'flac');
+});
+
+test('batch cancel retains selection and does not enqueue downloads', async () => {
+  const selected = new Set(['a']);
+  const batch = new Set();
+  await helper('downloadSelected', {
+    queue: ['a'], selectedTokens: selected, batchTokens: batch, batchDownloading: false,
+    chooseDownloadFormat: async () => null, updateSelection() {}, pruneTracks() {},
+    document: { querySelectorAll: () => [] },
+    startDownload() { assert.fail('cancel must not download'); }
+  })();
+  assert.equal(selected.has('a'), true);
+  assert.equal(batch.size, 0);
+});
+
+test('download request carries the selected format', async () => {
+  let payload;
+  await helper('startDownload', {
+    tracks: new Map([['song', {}]]), downloadingTokens: new Set(), toast() {},
+    fetch: async (_, options) => { payload = JSON.parse(options.body); return { json: async () => ({ error: 'test' }) }; }
+  })('song', null, 'flac');
+  assert.deepEqual(payload, { token: 'song', format: 'flac' });
+});
+
+test('dialog keyboard input never triggers playback shortcuts', () => {
+  helper('handleShortcuts', { step() { assert.fail('must not change track'); } })({
+    code: 'ArrowRight', altKey: true, target: { closest: selector => selector === 'dialog' }
+  });
 });
 
 test('download tracking keeps its duplicate guard through connection loss', () => {

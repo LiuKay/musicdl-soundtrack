@@ -1,3 +1,4 @@
 flask>=3.0
 musicdl>=2.13.1
 requests>=2.31
+mutagen>=1.47

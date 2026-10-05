@@ -22,6 +22,27 @@ p { text-wrap: pretty; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: #c6c6cb; border: 2px solid transparent; background-clip: padding-box; border-radius: 8px; }
 
+/* Focused download choice, using the existing surface and radius scale. */
+.format-dialog { margin: auto; width: min(400px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 24px; border: 0; border-radius: var(--r-lg); color: var(--text); background: var(--canvas); box-shadow: 0 16px 64px #0003; overscroll-behavior: contain; }
+.format-dialog::backdrop { background: #17171c66; }
+.format-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.format-heading h2 { font-size: 20px; letter-spacing: -.012em; }
+.format-heading button { min-width: 40px; color: var(--muted); }
+.format-track { margin: 4px 0 22px; color: var(--muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.format-options { border: 0; display: grid; gap: 8px; }
+.format-options legend { margin-bottom: 10px; font-size: 12px; color: var(--muted); }
+.format-options label { display: flex; gap: 12px; align-items: center; padding: 14px; border-radius: var(--r-md); background: var(--sidebar); cursor: pointer; }
+.format-options label:has(input:checked) { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.format-options label:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+.format-options input { width: 16px; height: 16px; accent-color: var(--accent); }
+.format-options strong, .format-options small { display: block; }
+.format-options strong { font-size: 14px; }
+.format-options small { margin-top: 3px; font-size: 11px; color: var(--muted); }
+.format-help { min-height: 44px; margin: 14px 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.format-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.format-actions button { padding: 0 20px; background: var(--sidebar); }
+.format-actions .format-confirm { background: var(--accent); color: white; }
+
 /* Native shell: sources and storage stay out of the search workspace. */
 .sidebar { grid-column: 1; grid-row: 1 / 3; background: var(--sidebar); border-right: 1px solid var(--line); padding: 30px 18px 18px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
 .brand { display: flex; align-items: center; gap: 11px; padding: 0 10px 29px; }
