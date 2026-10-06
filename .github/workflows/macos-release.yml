@@ -31,7 +31,9 @@ jobs:
           .venv/bin/python -m pip install -r requirements.txt
           make app
       - name: Regression tests
-        run: .venv/bin/python -m unittest -v test_app.py
+        run: SOUNDTRACK_FFMPEG="$PWD/build/audio-tools/bin/ffmpeg" SOUNDTRACK_FFPROBE="$PWD/build/audio-tools/bin/ffprobe" make test
+      - name: Test bundled conversion without system tools
+        run: .venv/bin/python scripts/smoke-packaged-audio.py dist/Soundtrack.app/Contents/MacOS/Soundtrack
       - name: Test packaged app with read-only resources
         run: |
           .venv/bin/python - <<'PY'
@@ -48,7 +50,8 @@ jobs:
           original_mode = resources.stat().st_mode
           with tempfile.TemporaryDirectory() as temp:
               env = dict(os.environ, SOUNDTRACK_DOWNLOAD_DIR=temp + '/downloads',
-                         SOUNDTRACK_CACHE_DIR=temp + '/cache')
+                         SOUNDTRACK_CACHE_DIR=temp + '/cache',
+                         SOUNDTRACK_SETTINGS_DIR=temp + '/settings')
               process = None
               try:
                   resources.chmod(0o555)
@@ -84,9 +87,11 @@ jobs:
                   resources.chmod(original_mode)
           PY
       - name: Package
-        run: ditto -c -k --sequesterRsrc --keepParent dist/Soundtrack.app "Soundtrack-macOS-${RELEASE_TAG}.zip"
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/Soundtrack.app "Soundtrack-macOS-${RELEASE_TAG}.zip"
+          cp build/audio-tools/audio-tools-source.tar.gz "Soundtrack-audio-sources-macOS-${RELEASE_TAG}.tar.gz"
       # ponytail: the Release asset is enough; do not duplicate it as an Actions artifact.
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$RELEASE_TAG" "Soundtrack-macOS-${RELEASE_TAG}.zip" --clobber
+        run: gh release upload "$RELEASE_TAG" "Soundtrack-macOS-${RELEASE_TAG}.zip" "Soundtrack-audio-sources-macOS-${RELEASE_TAG}.tar.gz" --clobber

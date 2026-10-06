@@ -1,5 +1,7 @@
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 import wave
@@ -9,6 +11,83 @@ from unittest import mock
 
 import app
 import audio_formats
+from test_audio_fixtures import SILENT_FLAC
+
+
+class ToolDiscoveryTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.env = mock.patch.dict(os.environ, {}, clear=True)
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        audio_formats._probe_tools.cache_clear()
+        self.addCleanup(audio_formats._probe_tools.cache_clear)
+
+    def tools(self):
+        for name in ('ffmpeg', 'ffprobe', 'ffmpeg.exe', 'ffprobe.exe'):
+            path = self.root / name
+            path.write_bytes(b'tool')
+            path.chmod(0o755)
+
+    def test_bundled_tools_win_over_system_tools(self):
+        self.tools()
+        with mock.patch.object(audio_formats, 'bundled_tool_dir', return_value=self.root), \
+                mock.patch.object(audio_formats.shutil, 'which') as system:
+            expected = 'ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'
+            self.assertEqual(audio_formats.tool_path('ffmpeg'), str(self.root / expected))
+            self.assertEqual(audio_formats.tool_source(), 'bundled')
+            system.assert_not_called()
+
+    def test_explicit_override_wins_and_invalid_override_does_not_silently_fallback(self):
+        self.tools()
+        with mock.patch.dict(os.environ, {'SOUNDTRACK_FFMPEG': '/custom/ffmpeg'}), \
+                mock.patch.object(audio_formats, 'bundled_tool_dir', return_value=self.root), \
+                mock.patch.object(audio_formats.shutil, 'which', return_value=None) as which:
+            self.assertIsNone(audio_formats.tool_path('ffmpeg'))
+            which.assert_called_once_with('/custom/ffmpeg')
+
+    def test_frozen_resource_roots_and_windows_suffix(self):
+        with mock.patch.object(audio_formats.sys, 'frozen', True, create=True), \
+                mock.patch.object(audio_formats.sys, '_MEIPASS', str(self.root), create=True):
+            self.assertEqual(audio_formats.bundled_tool_dir(), self.root / 'audio-tools/bin')
+            with mock.patch.dict(os.environ, {'RESOURCEPATH': str(self.root / 'Resources')}):
+                self.assertEqual(audio_formats.bundled_tool_dir(), self.root / 'Resources/audio-tools/bin')
+        executable = self.root / 'ffmpeg.exe'
+        executable.touch()
+        executable.chmod(0o755)
+        with mock.patch.object(audio_formats.sys, 'platform', 'win32'), \
+                mock.patch.object(audio_formats, 'bundled_tool_dir', return_value=self.root):
+            self.assertEqual(audio_formats.tool_path('ffmpeg'), str(executable))
+
+    def test_probe_cache_refresh_and_binary_replacement(self):
+        self.tools()
+        outputs = [SimpleNamespace(returncode=0, stdout=' A....D libmp3lame MP3\n'),
+                   SimpleNamespace(returncode=0, stdout='ffprobe version 8')]
+        with mock.patch.object(audio_formats, 'tool_path', side_effect=lambda name: str(self.root / name)), \
+                mock.patch.object(audio_formats.subprocess, 'run', side_effect=outputs * 3) as run:
+            self.assertTrue(audio_formats.can_convert())
+            self.assertTrue(audio_formats.can_convert())
+            self.assertEqual(run.call_count, 2)
+            self.assertTrue(audio_formats.can_convert(refresh=True))
+            self.assertEqual(run.call_count, 4)
+            (self.root / 'ffmpeg').write_bytes(b'replacement')
+            self.assertTrue(audio_formats.can_convert())
+            self.assertEqual(run.call_count, 6)
+
+    def test_probe_rejects_missing_encoder_broken_probe_and_timeouts(self):
+        self.tools()
+        for encoders, probe in [('', 'ffprobe version 8'), (' A....D libmp3lame MP3', ''),
+                                (' V....D libmp3lame wrong type', 'ffprobe version 8')]:
+            with mock.patch.object(audio_formats, 'tool_path', side_effect=lambda name: str(self.root / name)), \
+                    mock.patch.object(audio_formats.subprocess, 'run', side_effect=[
+                        SimpleNamespace(returncode=0, stdout=encoders),
+                        SimpleNamespace(returncode=0, stdout=probe)]):
+                self.assertFalse(audio_formats.can_convert(refresh=True))
+        with mock.patch.object(audio_formats, 'tool_path', side_effect=lambda name: str(self.root / name)), \
+                mock.patch.object(audio_formats.subprocess, 'run', side_effect=subprocess.TimeoutExpired('ffmpeg', 5)):
+            self.assertFalse(audio_formats.can_convert(refresh=True))
 
 
 class FormatRequestTest(unittest.TestCase):
@@ -24,6 +103,13 @@ class FormatRequestTest(unittest.TestCase):
                      {'token': 't', 'format': None}, {'token': 't', 'format': ['mp3']}]:
             with self.subTest(data=data):
                 self.assertEqual(self.client.post('/api/download', json=data).status_code, 400)
+
+    def test_capability_recheck_refreshes_probe_and_returns_tool_source(self):
+        with mock.patch.object(audio_formats, 'can_convert', return_value=True) as probe, \
+                mock.patch.object(audio_formats, 'tool_source', return_value='bundled'):
+            self.assertEqual(self.client.get('/api/download/formats?refresh=1').get_json(),
+                             {'mp3_conversion': True, 'tool_source': 'bundled'})
+            probe.assert_called_once_with(refresh=True)
 
     def test_flac_requires_original_flac_even_if_converter_exists(self):
         with mock.patch.object(app, '_enqueue_download') as enqueue:
@@ -42,7 +128,7 @@ class FormatRequestTest(unittest.TestCase):
                 if status == 200:
                     ident = result.get_json()['download_id']
                     self.assertEqual(app.DOWNLOADS.pop(ident)['format'], target)
-            self.assertEqual(self.client.get('/api/download/formats').get_json(), {'mp3_conversion': False})
+            self.assertFalse(self.client.get('/api/download/formats').get_json()['mp3_conversion'])
 
 
 @unittest.skipUnless(audio_formats.can_convert(), 'FFmpeg/FFprobe are required for real audio tests')
@@ -56,9 +142,9 @@ class AudioConversionTest(unittest.TestCase):
         with wave.open(str(wav), 'wb') as audio:
             audio.setparams((1, 2, 44100, 0, 'NONE', 'not compressed'))
             audio.writeframes(b'\0\0' * 44100)
-        for ext, codec in [('mp3', 'libmp3lame'), ('flac', 'flac')]:
-            subprocess.run([audio_formats.tool_path('ffmpeg'), '-v', 'error', '-i',
-                            str(wav), '-c:a', codec, str(root / ('tone.' + ext))], check=True)
+        subprocess.run([audio_formats.tool_path('ffmpeg'), '-v', 'error', '-i',
+                        str(wav), '-c:a', 'libmp3lame', str(root / 'tone.mp3')], check=True)
+        (root / 'tone.flac').write_bytes(SILENT_FLAC)
         cls.audio = {ext: (root / ('tone.' + ext)).read_bytes() for ext in ('mp3', 'flac', 'wav')}
 
     def setUp(self):

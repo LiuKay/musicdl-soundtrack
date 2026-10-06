@@ -134,10 +134,14 @@
     </select>
   </label>
   <details class="conversion-help">
-    <summary>MP3 转换工具 <span id="conversionStatus">点击检测</span></summary>
-    <p>原始 MP3/FLAC 可直接保存。其他音频转 MP3 需要在运行声轨的电脑安装 FFmpeg 和 FFprobe（含 libmp3lame 编码器）。</p>
-    <p>macOS 可通过 Homebrew 安装：<code>brew install ffmpeg</code>；Windows 可从 FFmpeg 官网选择 Windows 构建，并将包含两个程序的 bin 目录加入 PATH。安装后重新打开声轨。</p>
-    <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener noreferrer">FFmpeg 官方下载说明</a>
+    <summary>MP3 转换 <span id="conversionStatus" role="status">正在检测…</span></summary>
+    <p id="conversionHelp">桌面版内置转换功能，无需额外安装。原始 MP3 直接保存，其他支持的音频可转为 MP3；转换不会提升音质。</p>
+    <div id="conversionTroubleshooting" hidden>
+      <p>桌面版请先重新下载完整应用。源码运行时，需要在运行声轨的电脑安装 FFmpeg 和 FFprobe（含 libmp3lame 编码器）。</p>
+      <p>macOS：<code>brew install ffmpeg</code>；Windows：安装后将两个程序所在的 bin 目录加入 PATH，再重新打开声轨。</p>
+      <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener noreferrer">FFmpeg 官方下载说明</a>
+    </div>
+    <p>内置转换使用 FFmpeg 和 LAME；许可与对应源码说明见应用内 audio-tools/licenses 目录及项目 Release 附件。</p>
     <button id="checkConversion" type="button">重新检测</button>
   </details>
   <div class="dl-scroll">

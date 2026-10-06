@@ -25,22 +25,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: make curl tar xz mingw-w64-ucrt-x86_64-gcc
+      - name: Build audio tools from pinned sources
+        shell: msys2 {0}
+        run: bash scripts/build-audio-tools.sh
       - name: Build
         shell: pwsh
-        run: .\build-windows.ps1
+        run: .\build-windows.ps1 -SkipAudioBuild
       - name: Smoke test
         shell: pwsh
         run: |
-          $app = Start-Process '.\dist\Soundtrack\Soundtrack.exe' -PassThru
-          Start-Sleep -Seconds 10
-          if ($app.HasExited) { throw "Soundtrack exited with code $($app.ExitCode)" }
-          Stop-Process -Id $app.Id
+          python scripts/smoke-packaged-audio.py dist/Soundtrack/Soundtrack.exe
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path dist\Soundtrack -DestinationPath "Soundtrack-Windows-$env:RELEASE_TAG.zip" -Force
+        run: |
+          Compress-Archive -Path dist\Soundtrack -DestinationPath "Soundtrack-Windows-$env:RELEASE_TAG.zip" -Force
+          Copy-Item build/audio-tools/audio-tools-source.tar.gz "Soundtrack-audio-sources-Windows-$env:RELEASE_TAG.tar.gz"
       # ponytail: the Release asset is enough; do not duplicate it as an Actions artifact.
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
-        run: gh release upload "$env:RELEASE_TAG" "Soundtrack-Windows-$env:RELEASE_TAG.zip" --clobber
+        run: gh release upload "$env:RELEASE_TAG" "Soundtrack-Windows-$env:RELEASE_TAG.zip" "Soundtrack-audio-sources-Windows-$env:RELEASE_TAG.tar.gz" --clobber

@@ -3,26 +3,79 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
+from functools import lru_cache
 
 from mutagen.flac import FLAC
 from mutagen.mp3 import MP3
 
 INPUT_FORMATS = 'mp3,flac,wav,ogg,mov,aac,aiff,ape,asf,wv'
+PROCESS_OPTIONS = {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0) if os.name == 'nt' else 0}
+
+
+def bundled_tool_dir():
+    if getattr(sys, 'frozen', False):
+        root = os.environ.get('RESOURCEPATH') or getattr(sys, '_MEIPASS', Path(sys.executable).parent)
+    else:
+        root = Path(__file__).resolve().parent
+    return Path(root) / 'audio-tools' / 'bin'
 
 
 def tool_path(name):
+    if name not in ('ffmpeg', 'ffprobe'):
+        raise ValueError('Unsupported audio tool')
     configured = os.environ.get('SOUNDTRACK_' + name.upper())
     if configured:
         return shutil.which(configured)
+    bundled = bundled_tool_dir() / (name + ('.exe' if sys.platform == 'win32' else ''))
+    if bundled.is_file() and os.access(bundled, os.X_OK):
+        return str(bundled)
     return (shutil.which(name) or shutil.which('/opt/homebrew/bin/' + name)
             or shutil.which('/usr/local/bin/' + name))
 
 
-def can_convert():
-    return bool(tool_path('ffmpeg') and tool_path('ffprobe'))
+def _tool_identity(path):
+    info = os.stat(path)
+    return path, info.st_size, info.st_mtime_ns
+
+
+@lru_cache(maxsize=16)
+def _probe_tools(ffmpeg, ffprobe):
+    try:
+        encoders = subprocess.run([ffmpeg[0], '-hide_banner', '-encoders'],
+                                 capture_output=True, text=True, timeout=5, **PROCESS_OPTIONS)
+        probe = subprocess.run([ffprobe[0], '-version'],
+                               capture_output=True, text=True, timeout=5, **PROCESS_OPTIONS)
+        has_lame = any(len(parts := line.split()) > 1 and parts[1] == 'libmp3lame'
+                       and parts[0].startswith('A') for line in encoders.stdout.splitlines())
+        return (encoders.returncode == 0 and has_lame and probe.returncode == 0
+                and probe.stdout.startswith('ffprobe version'))
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return False
+
+
+def can_convert(refresh=False):
+    if refresh:
+        _probe_tools.cache_clear()
+    paths = tool_path('ffmpeg'), tool_path('ffprobe')
+    if not all(paths):
+        return False
+    try:
+        return _probe_tools(*(_tool_identity(path) for path in paths))
+    except OSError:
+        return False
+
+
+def tool_source():
+    if any(os.environ.get('SOUNDTRACK_' + name) for name in ('FFMPEG', 'FFPROBE')):
+        return 'configured'
+    paths = [tool_path(name) for name in ('ffmpeg', 'ffprobe')]
+    if all(paths) and all(Path(path).parent == bundled_tool_dir() for path in paths):
+        return 'bundled'
+    return 'system' if all(paths) else 'missing'
 
 
 def _stop(process):
@@ -52,7 +105,7 @@ def inspect_audio(path, check_cancelled):
         '-format_whitelist', INPUT_FORMATS,
         '-select_streams', 'a:0', '-show_entries',
         'stream=codec_name,duration:format=duration', '-of', 'json', path,
-    ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **PROCESS_OPTIONS)
     deadline = time.monotonic() + 20
     try:
         while True:
@@ -93,7 +146,7 @@ def convert_mp3(source, destination, duration, check_cancelled, report):
                 '-map', '0:a:0', '-vn', '-map_metadata', '-1',
                 '-c:a', 'libmp3lame', '-b:a', '320k', '-threads', '1',
                 '-progress', str(progress), '-f', 'mp3', destination,
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **PROCESS_OPTIONS)
             deadline = time.monotonic() + 1800
             try:
                 while True:

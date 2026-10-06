@@ -33,11 +33,11 @@ make app
 open dist/Soundtrack.app
 ```
 
-构建命令会把仅桌面版需要的打包工具安装到 `.venv`。应用默认把音乐保存在 `~/Downloads/Soundtrack/`，也可在下载面板中选择其他目录；“缓存已播放歌曲”的临时文件保存在 `~/Library/Caches/Soundtrack/audio/`。
+需要 Apple 命令行开发工具。构建命令会校验固定版本源码并编译精简音频转换工具，再把桌面打包工具安装到 `.venv`；首次构建需要联网并耗时数分钟。应用默认把音乐保存在 `~/Downloads/Soundtrack/`，也可在下载面板中选择其他目录；“缓存已播放歌曲”的临时文件保存在 `~/Library/Caches/Soundtrack/audio/`。
 
 ## 构建 Windows 应用
 
-在 Windows PowerShell 中运行：
+先安装 MSYS2 UCRT64 构建环境，所需软件包见[音频工具构建说明](docs/audio-tools.md)，然后在 Windows PowerShell 中运行：
 
 ```powershell
 py -m venv .venv
@@ -45,7 +45,7 @@ py -m venv .venv
 .\build-windows.ps1
 ```
 
-程序生成在 `dist\Soundtrack\Soundtrack.exe`。也可以在 GitHub Actions 中运行 `Windows app` 工作流并下载构建产物。
+程序生成在 `dist\Soundtrack\Soundtrack.exe`，旁边的支持文件必须保留。发布时 `Windows release` 工作流会构建应用，并将 ZIP 和音频工具对应源码包上传到同一 GitHub Release。
 
 > 需要能正常访问所选音乐平台的网络环境。本工具仅供学习研究，请尊重版权与各平台条款。
 
@@ -125,7 +125,15 @@ docs/             Pages 展示页与界面截图，不包含在线搜索或下�
 
 目前没有账号登录或 Cookie 配置界面。开发者可参照 musicdl 文档，在 `ClientManager._build()` 中配置自己有权使用的来源参数；这不保证特定曲目、会员音质或受保护格式可用，也不要将凭据提交到仓库。
 
-MP3 转换需要在运行应用的电脑安装 FFmpeg（含 FFprobe，且带 `libmp3lame` 编码器）。通过 PATH 或 macOS Homebrew 路径自动查找，也可用 `SOUNDTRACK_FFMPEG` / `SOUNDTRACK_FFPROBE` 指定可执行文件路径。下载面板的「MP3 转换工具」提供状态检测、安装帮助和重新检测。桌面安装包不内置或自动安装这些工具；缺少工具时仍可直接下载原始 MP3/FLAC，批量预检会把需转换项目列为不可下载。真实音频转换测试在未安装工具时跳过。
+从 v0.7.0 起，macOS / Windows 桌面包内置精简 FFmpeg、FFprobe 和 LAME，可离线转换 MP3，无需额外安装；已有 v0.6.0 安装包不包含这些工具。仅启用音频处理和本地文件输入，不含视频编码器或网络协议。下载面板的「MP3 转换」显示就绪状态；异常时提供恢复说明和重新检测。
+
+源码运行时，可安装带 `libmp3lame` 的 FFmpeg / FFprobe，或通过 `SOUNDTRACK_FFMPEG` / `SOUNDTRACK_FFPROBE` 指定可执行文件路径。查找顺序为显式配置、应用内置、系统 PATH / Homebrew；无效的显式配置不会被忽略。缺少或无法运行转换工具时，原始 MP3/FLAC 仍可直接保存，批量预检会标明需转换项目不可用。真实音频转换测试在工具不可用时跳过。
+
+内置工具的完整许可证在应用的 `audio-tools/licenses` 中；对应源码与构建脚本随 Release 单独提供，不增加应用运行依赖。版本、校验值、重建步骤和发布要求见[音频工具说明](docs/audio-tools.md)。
+
+开发验收可通过 `SOUNDTRACK_SETTINGS_DIR` 指定独立的桌面设置与网页存储目录，同时隔离下载和缓存目录；打包冒烟测试会自动使用临时目录。
+
+维护者发布新版本可参照 [GitHub 网页发布指南](docs/releasing.md)，包含创建版本、检查自动打包和失败后重试的步骤。
 
 Soundtrack 使用 musicdl 在搜索阶段解析出的直接音频 URL，通过自己的 HTTP 流程播放和下载，不调用来源专用的 musicdl `_download`。支持本地转 MP3，但不实现专用媒体解密、HLS 分片合并，也不提供下载任务的跨重启恢复和断点续传。Apple Music、Deezer、Joox、千千音乐、Qobuz、SoundCloud、StreetVoice、汽水音乐和 TIDAL 尚未接入；界面借鉴 Apple Music 的视觉风格，不代表接入了 Apple Music 服务。
 

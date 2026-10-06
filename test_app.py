@@ -14,6 +14,14 @@ import desktop
 
 
 class SearchCompatibilityTest(unittest.TestCase):
+    def test_desktop_profile_override_isolates_settings_and_webview(self):
+        import runpy
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.dict(os.environ, {'SOUNDTRACK_SETTINGS_DIR': temp}):
+            module = runpy.run_path(str(Path(desktop.__file__)))
+            self.assertEqual(module['SETTINGS_DIR'], Path(temp))
+            self.assertEqual(module['SETTINGS_PATH'], Path(temp) / 'settings.json')
+
     def test_desktop_exit_checks_live_background_tasks_not_page_state(self):
         window = SimpleNamespace(confirm_close=False)
         for status in ['queued', 'downloading', 'checking', 'waiting_conversion', 'converting',

@@ -20,6 +20,8 @@ else:
     SETTINGS_DIR = Path(os.environ.get(
         'XDG_CONFIG_HOME', Path.home() / '.config',
     )) / 'Soundtrack'
+# Packaged smoke tests use an isolated profile as well as isolated audio folders.
+SETTINGS_DIR = Path(os.environ.get('SOUNDTRACK_SETTINGS_DIR', SETTINGS_DIR)).expanduser()
 SETTINGS_PATH = SETTINGS_DIR / 'settings.json'
 QUIT_DOWNLOAD_MESSAGE = (
     '仍有正在提交或未完成的下载、转换任务（包括排队和取消中的任务）。\n\n'

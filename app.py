@@ -1426,7 +1426,8 @@ def api_retry_download(download_id):
 
 @app.route('/api/download/formats')
 def api_download_formats():
-    return jsonify({'mp3_conversion': audio_formats.can_convert()})
+    return jsonify({'mp3_conversion': audio_formats.can_convert(refresh=request.args.get('refresh') == '1'),
+                    'tool_source': audio_formats.tool_source()})
 
 
 @app.route('/api/download/concurrency', methods=['GET', 'POST'])

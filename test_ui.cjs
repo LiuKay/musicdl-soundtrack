@@ -43,6 +43,51 @@ function cacheContext(fetch, confirm = () => true) {
   return { context, nodes, messages };
 }
 
+function conversionContext(fetch) {
+  const nodes = Object.fromEntries(['conversionStatus', 'conversionHelp', 'conversionTroubleshooting',
+    'checkConversion'].map(id => ['#' + id, element()]));
+  const context = vm.createContext({ $: id => nodes[id], conversionRequestId: 0, fetch });
+  vm.runInContext(source.match(/async function checkConversionTools\([^]*?\n\}/)[0], context);
+  return { context, nodes };
+}
+
+test('bundled conversion is ready without installation advice; recheck forces a fresh probe', async () => {
+  const { context, nodes } = conversionContext(async url => {
+    assert.equal(url, '/api/download/formats?refresh=1');
+    return { ok: true, json: async () => ({ mp3_conversion: true, tool_source: 'bundled' }) };
+  });
+  await context.checkConversionTools(true);
+  assert.equal(nodes['#conversionStatus'].textContent, '已就绪');
+  assert.match(nodes['#conversionHelp'].textContent, /无需额外安装/);
+  assert.equal(nodes['#conversionTroubleshooting'].hidden, true);
+  assert.equal(nodes['#checkConversion'].disabled, false);
+});
+
+test('conversion tool failure and service failure have distinct recovery guidance', async () => {
+  const { context, nodes } = conversionContext(async () => ({ ok: true,
+    json: async () => ({ mp3_conversion: false, tool_source: 'missing' }) }));
+  await context.checkConversionTools();
+  assert.equal(nodes['#conversionStatus'].textContent, '暂不可用');
+  assert.equal(nodes['#conversionTroubleshooting'].hidden, false);
+  context.fetch = async () => { throw Error('offline'); };
+  await context.checkConversionTools();
+  assert.equal(nodes['#conversionStatus'].textContent, '检测失败，请重试');
+  assert.equal(nodes['#conversionTroubleshooting'].hidden, true);
+  assert.equal(nodes['#checkConversion'].disabled, false);
+});
+
+test('late conversion status cannot overwrite the latest check', async () => {
+  let finish;
+  const { context, nodes } = conversionContext(() => new Promise(resolve => { finish = resolve; }));
+  const previous = context.checkConversionTools();
+  context.fetch = async () => ({ ok: true, json: async () => ({ mp3_conversion: true, tool_source: 'bundled' }) });
+  await context.checkConversionTools(true);
+  finish({ ok: true, json: async () => ({ mp3_conversion: false }) });
+  await previous;
+  assert.equal(nodes['#conversionStatus'].textContent, '已就绪');
+  assert.equal(nodes['#conversionTroubleshooting'].hidden, true);
+});
+
 test('cache cleanup cancellation sends no request or state change', async () => {
   const { context, nodes } = cacheContext(() => assert.fail('no request after cancel'), () => false);
   await context.loadCache(true);

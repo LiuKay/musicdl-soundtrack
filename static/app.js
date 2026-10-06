@@ -1157,7 +1157,7 @@ async function chooseDownloadFormat(tokens) {
       : !needsConversion ? '直接下载原始 MP3，不重新编码。'
       : capability === null ? '正在检查本机转换工具…'
       : capability ? '非 MP3 音频将转换为 320 kbps MP3；转换不会提升原始音质。'
-      : 'MP3 转换不可用，请确认已安装 FFmpeg 和 FFprobe 后重试。';
+      : 'MP3 转换暂不可用，请在下载面板查看转换状态并重新检测。';
   };
   mp3.onchange = flac.onchange = update;
   update();
@@ -1342,19 +1342,32 @@ async function exportLocalMp3(track, button) {
   }
 }
 
-async function checkConversionTools() {
+let conversionRequestId = 0;
+async function checkConversionTools(refresh = false) {
+  const requestId = ++conversionRequestId;
   const status = $('#conversionStatus');
   status.textContent = '检测中…';
+  $('#checkConversion').disabled = true;
   try {
-    const response = await fetch('/api/download/formats');
+    const response = await fetch('/api/download/formats' + (refresh ? '?refresh=1' : ''));
     if (!response.ok) throw new Error();
     const data = await response.json();
-    status.textContent = data.mp3_conversion ? '可用' : '未安装或未找到';
+    if (requestId !== conversionRequestId) return;
+    status.textContent = data.mp3_conversion ? '已就绪' : '暂不可用';
+    $('#conversionTroubleshooting').hidden = data.mp3_conversion;
+    $('#conversionHelp').textContent = data.mp3_conversion
+      ? (data.tool_source === 'bundled' ? '已内置转换功能，无需额外安装。' : '本机转换功能已就绪。') + '原始 MP3 直接保存，其他支持的音频可转为 MP3；转换不会提升音质。'
+      : '转换工具缺失或无法运行；原始 MP3 和 FLAC 仍可直接保存。';
   } catch {
+    if (requestId !== conversionRequestId) return;
     status.textContent = '检测失败，请重试';
+    $('#conversionHelp').textContent = '暂时无法连接转换检测服务，请重新检测。';
+    $('#conversionTroubleshooting').hidden = true;
+  } finally {
+    if (requestId === conversionRequestId) $('#checkConversion').disabled = false;
   }
 }
-$('#checkConversion').onclick = checkConversionTools;
+$('#checkConversion').onclick = () => checkConversionTools(true);
 $('.conversion-help').addEventListener('toggle', e => { if (e.target.open) checkConversionTools(); });
 
 async function requestDownload(token, btn) {
@@ -1683,3 +1696,4 @@ updateLeaveWarning();
 restoreSession();
 loadSources();
 restoreDownloads();
+checkConversionTools();

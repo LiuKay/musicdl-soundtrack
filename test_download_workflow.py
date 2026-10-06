@@ -1,6 +1,5 @@
 import json
 import os
-import subprocess
 import tempfile
 import unittest
 import wave
@@ -11,6 +10,7 @@ from unittest import mock
 
 import app
 import audio_formats
+from test_audio_fixtures import SILENT_FLAC
 
 
 class DownloadWorkflowFixture(unittest.TestCase):
@@ -243,8 +243,7 @@ class LocalExportTest(DownloadWorkflowFixture):
     def test_search_download_reuses_matching_local_flac(self):
         entry = self.track('flac', ext='flac')
         source = self.saved(entry, ext='flac')
-        source.unlink()
-        subprocess.run([audio_formats.tool_path('ffmpeg'), '-v', 'error', '-i', str(self.tone()), str(source)], check=True)
+        source.write_bytes(SILENT_FLAC)
         item = self.plan(['flac']).get_json()['items'][0]
         self.assertEqual(item['local_source'], 'MIGU/Song - Artist.flac')
         response = self.client.post('/api/download', json={'token': 'flac', 'format': 'mp3'})

@@ -43,11 +43,11 @@ make app
 open dist/Soundtrack.app
 ```
 
-The build command installs the desktop-only packaging tools into `.venv`. The app saves music under `~/Downloads/Soundtrack/` by default, and the download drawer can select another folder; “Cache played songs” stores temporary files under `~/Library/Caches/Soundtrack/audio/`.
+Apple's command-line build tools are required. The build verifies pinned source archives and compiles the minimal audio tools, then installs desktop packaging tools into `.venv`; the first build needs network access and takes several minutes. The app saves music under `~/Downloads/Soundtrack/` by default, and the download drawer can select another folder; “Cache played songs” stores temporary files under `~/Library/Caches/Soundtrack/audio/`.
 
 ## Build the Windows app
 
-Run in PowerShell on Windows:
+Install MSYS2 UCRT64 and the packages listed in the [audio build guide](docs/audio-tools.md), then run in PowerShell on Windows:
 
 ```powershell
 py -m venv .venv
@@ -55,7 +55,7 @@ py -m venv .venv
 .\build-windows.ps1
 ```
 
-The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run the `Windows app` workflow from GitHub Actions and download its artifact.
+The executable is created at `dist\Soundtrack\Soundtrack.exe`; keep its supporting files alongside it. The `Windows release` workflow builds the app and uploads its ZIP and corresponding audio-tool sources to the same GitHub Release.
 
 > Your network must be able to reach the selected music platforms. For learning and research only. Please respect copyright and each platform's terms of service.
 
@@ -135,7 +135,15 @@ Constants at the top of `app.py`:
 
 There is no login or Cookie settings interface. Developers can configure authorized source parameters in `ClientManager._build()` using the musicdl documentation. This does not guarantee access to a track, subscription quality, or protected format. Do not commit credentials.
 
-MP3 conversion requires FFmpeg with FFprobe and the `libmp3lame` encoder on the computer running the app. Tools are detected through PATH or macOS Homebrew locations; `SOUNDTRACK_FFMPEG` / `SOUNDTRACK_FFPROBE` can override executable paths. The drawer's "MP3 转换工具" section offers status detection, installation help, and rechecking. Desktop packages neither bundle nor automatically install these tools. Native MP3/FLAC downloads still work without them; batch preflight marks tracks requiring conversion as unavailable. Real audio conversion tests are skipped if the tools are unavailable.
+Starting with v0.7.0, macOS / Windows desktop packages bundle minimal FFmpeg, FFprobe and LAME tools for offline MP3 conversion without additional installation; existing v0.6.0 packages do not contain them. Only audio processing and local file input are enabled, with no video encoders or network protocols. The drawer's "MP3 转换" section shows readiness and offers recovery guidance and rechecking when needed.
+
+When running from source, install FFmpeg / FFprobe with `libmp3lame`, or set executable paths through `SOUNDTRACK_FFMPEG` / `SOUNDTRACK_FFPROBE`. Lookup order is explicit configuration, bundled tools, then system PATH / Homebrew. Invalid explicit overrides are not silently ignored. Native MP3/FLAC downloads remain available if conversion tools are missing or cannot run; batch preflight marks tracks requiring conversion as unavailable. Real audio conversion tests are skipped when tools are unavailable.
+
+Complete tool licenses are included in the app's `audio-tools/licenses` directory. Corresponding sources and build scripts are separate Release assets, not runtime dependencies. See the [audio-tool guide](docs/audio-tools.md) for versions, checksums, rebuilding and release requirements.
+
+For development checks, `SOUNDTRACK_SETTINGS_DIR` selects an isolated desktop settings and web-storage directory, alongside isolated download and cache directories. The packaged smoke test uses temporary directories automatically.
+
+Maintainers can follow the [GitHub web release guide (Chinese)](docs/releasing.md) to create a version, check automated packaging and retry failed builds.
 
 Soundtrack plays and downloads direct audio URLs resolved by musicdl through its own HTTP flow, not the source-specific musicdl `_download` flow. It supports local MP3 conversion but does not implement media decryption, HLS merging, download-task recovery after a restart, or resumable downloads. Apple Music, Deezer, Joox, Qianqian, Qobuz, SoundCloud, StreetVoice, Soda Music, and TIDAL are not integrated. The Apple Music-inspired appearance does not imply access to the Apple Music service.
 
