@@ -25,6 +25,7 @@ import requests
 from collections import deque
 from copy import copy
 from pathlib import Path
+from types import SimpleNamespace
 from flask import (
     Flask, request, Response, jsonify, send_file, send_from_directory,
     stream_with_context, url_for,
@@ -132,6 +133,12 @@ class TrackRegistry:
     def get(self, token):
         with self._lock:
             return self._tracks.get(token)
+
+    def add_local(self, entry):
+        token = uuid.uuid4().hex[:16]
+        with self._lock:
+            self._tracks[token] = entry
+        return token
 
 
 REGISTRY = TrackRegistry()
@@ -252,15 +259,28 @@ class _NullProgress:
     def __getattr__(self, _): return lambda *a, **k: None
 
 
+def _display_text(value, fallback=''):
+    text = '' if value is None else str(value).strip()
+    return fallback if text.lower() in ('', 'null', 'none', 'undefined', 'n/a', 'nan') else text
+
+
+def _source_label(value):
+    text = _display_text(value)
+    for ident, info in SUPPORTED_SOURCES.items():
+        if text.casefold() in (ident.casefold(), info['short'].casefold(), info['label'].casefold()):
+            return info['label']
+    return text or '本地音频'
+
+
 def _track_payload(song_info, token):
     '''Serialize a SongInfo into the minimal JSON the frontend needs.'''
     def s(v):
-        return '' if v is None else str(v)
+        return _display_text(v)
     ext = s(song_info.ext).lower().lstrip('.')
     return {
         'token': token,
         'source': SUPPORTED_SOURCES.get(s(song_info.source), {}).get('short', s(song_info.source)),
-        'source_label': SUPPORTED_SOURCES.get(s(song_info.source), {}).get('label', s(song_info.source)),
+        'source_label': _source_label(song_info.source),
         'song_name': s(song_info.song_name) or '未知曲目',
         'singers': s(song_info.singers) or '未知艺人',
         'album': s(song_info.album),
@@ -401,6 +421,112 @@ DOWNLOAD_ACTIVE = 0
 DOWNLOAD_PENDING = deque()
 DOWNLOAD_QUEUE_LOCK = threading.Lock()
 TRANSCODE_LOCK = threading.Lock()
+DOWNLOAD_REQUEST_LOCK = threading.Lock()
+DOWNLOAD_TERMINAL = {'done', 'error', 'cancelled'}
+
+
+def _download_identity(entry):
+    if entry.get('identity'):
+        return entry['identity']
+    song = entry['song_info']
+    identifier = str(getattr(song, 'identifier', '') or '').strip()
+    if identifier.lower() in ('', 'none', 'null'):
+        return ''  # Names alone cannot distinguish recordings or versions.
+    fields = [entry['source'], identifier]
+    fields.extend(str(getattr(song, key, '') or '') for key in (
+        'ext', 'file_size_bytes', 'file_size', 'duration', 'bitrate', 'quality',
+    ))
+    return hashlib.sha256(json.dumps(fields, ensure_ascii=False).encode()).hexdigest()
+
+
+def _local_audio_path(relative):
+    if not isinstance(relative, str) or not relative or os.path.isabs(relative):
+        raise ValueError('无效的本地文件')
+    root = Path(DOWNLOAD_DIR).resolve()
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root) or path.suffix.lower().lstrip('.') not in RESULT_EXT_TO_MIME:
+        raise ValueError('无效的本地文件')
+    if not path.is_file():
+        raise ValueError('原文件未找到，请刷新资料库')
+    return str(path)
+
+
+def _local_entry(relative):
+    path = _local_audio_path(relative)
+    metadata = _read_download_metadata(path)
+    stat = os.stat(path)
+    name, separator, singers = Path(path).stem.rpartition(' - ')
+    identity = metadata.get('identity') or hashlib.sha256(
+        f'local\0{path}\0{stat.st_size}\0{stat.st_mtime_ns}'.encode(),
+    ).hexdigest()
+    song = SimpleNamespace(
+        song_name=metadata.get('song_name') or (name if separator else Path(path).stem),
+        singers=metadata.get('singers') or (singers if separator else ''),
+        album=metadata.get('album', ''), duration=metadata.get('duration', ''),
+        ext=Path(path).suffix.lstrip('.').lower(), file_size_bytes=stat.st_size,
+        lyric=_read_download_lyric(path), cover_url='',
+    )
+    return {'song_info': song, 'source': metadata.get('source', 'Local'),
+            'headers': {}, 'cookies': {}, 'identity': identity,
+            'local_relative': relative, 'local_size': stat.st_size,
+            'local_mtime_ns': stat.st_mtime_ns,
+            'local_cover': _existing_download_cover(path, metadata)}
+
+
+def _download_plan_item(token, entry, target, library):
+    if not entry:
+        return {'token': token, 'status': 'unavailable', 'error': '曲目已过期，请重新搜索'}
+    song = entry['song_info']
+    identity = _download_identity(entry)
+    original = str(getattr(song, 'ext', '') or '').lower().lstrip('.')
+    item = {'token': token, 'song_name': str(song.song_name), 'format': target,
+            'status': 'ready', 'conversion': original != target, 'existing': [], 'similar': []}
+    if target == 'flac' and original != 'flac':
+        item['error'] = '该曲目没有原始 FLAC'
+    elif original != target and not audio_formats.can_convert():
+        item['error'] = '转换不可用，请安装 FFmpeg 和 FFprobe 后重新检测'
+    with DL_LOCK:
+        for ident, rec in DOWNLOADS.items():
+            same = rec.get('identity') == identity if identity else rec.get('token') == token
+            if (same and rec.get('format') == target and rec.get('status') not in DOWNLOAD_TERMINAL
+                    and rec.get('download_root') == os.path.realpath(DOWNLOAD_DIR)):
+                return dict(item, status='active', download_id=ident)
+    for track in library:
+        file_info = {key: track[key] for key in ('relative', 'song_name', 'singers', 'ext', 'file_size_bytes')}
+        if identity and identity == track.get('identity'):
+            if track['ext'] == target:
+                item['existing'].append(file_info)
+            elif target == 'mp3' and track['ext'] == 'flac' and not entry.get('local_relative'):
+                item['local_source'] = track['relative']
+        elif (not track.get('identity') and track['song_name'] == str(song.song_name)
+              and track['singers'] == str(getattr(song, 'singers', '') or '')):
+            item['similar'].append(file_info)
+    item['can_download'] = not bool(item.get('error'))
+    item['status'] = 'existing' if item['existing'] else 'unavailable' if item.get('error') else 'ready'
+    return item
+
+
+def _submit_download(token, entry, target, duplicate=False):
+    # Serialize check + reservation so concurrent clicks/tabs cannot enqueue twins.
+    with DOWNLOAD_REQUEST_LOCK:
+        item = _download_plan_item(token, entry, target, _library_tracks())
+        if item['status'] == 'active':
+            return {'download_id': item['download_id'], 'reused': True}, 200
+        if item['status'] == 'existing' and not duplicate:
+            return dict(item, error='该格式已下载，请查看已有文件或确认另存一份', code='already_downloaded'), 409
+        if item.get('error'):
+            return item, 503 if target == 'mp3' else 400
+        if item.get('local_source'):
+            entry = _local_entry(item['local_source'])
+            token = REGISTRY.add_local(entry)
+        ident = uuid.uuid4().hex[:16]
+        song = entry['song_info']
+        _set_dl(ident, name=str(song.song_name), song_name=str(song.song_name),
+                singers=str(getattr(song, 'singers', '') or ''), format=target,
+                identity=_download_identity(entry), token=token, status='queued',
+                download_root=os.path.realpath(DOWNLOAD_DIR))
+        _enqueue_download(ident, token)
+        return {'download_id': ident}, 200
 
 
 def _safe_name(name):
@@ -437,12 +563,23 @@ def _save_download_metadata(path, entry):
         'duration': str(getattr(song, 'duration', '') or ''),
         'source_format': str(getattr(song, 'ext', '') or '').lower().lstrip('.'),
         'format': Path(path).suffix.lower().lstrip('.'),
+        'identity': _download_identity(entry),
+        'source': entry.get('source', 'Local'),
     }
     for suffix in ('', *COVER_MIME_SUFFIXES.values()):
         try:
             os.remove(path + '.soundtrack.cover' + suffix)
         except OSError:
             pass
+    if entry.get('local_cover'):
+        cover_path = entry['local_cover']
+        suffix = Path(cover_path).suffix.lower()
+        if suffix in COVER_MIME_SUFFIXES.values():
+            try:
+                shutil.copy2(cover_path, path + '.soundtrack.cover' + suffix)
+                metadata['cover_mime'] = next(mime for mime, ext in COVER_MIME_SUFFIXES.items() if ext == suffix)
+            except OSError:
+                pass
     cover_url = getattr(song, 'cover_url', None)
     if isinstance(cover_url, str) and cover_url.startswith('http'):
         try:
@@ -579,7 +716,8 @@ def _finish_download(download_id, entry, tmp, path):
         check()
         size = os.path.getsize(path)
         _set_dl(download_id, status='done', downloaded=size, total=size,
-                speed=0, name=os.path.basename(path), path=path)
+                speed=0, name=os.path.basename(path), path=path,
+                relative=os.path.relpath(path, _get_dl(download_id)['download_root']).replace(os.sep, '/'))
     finally:
         try:
             os.remove(converted)
@@ -594,8 +732,13 @@ def run_download(download_id, token):
         return
     song = entry['song_info']
     source = entry['source']
-    download_root = os.path.realpath(DOWNLOAD_DIR)
-    sub = os.path.join(download_root, SUPPORTED_SOURCES.get(source, {}).get('short', source))
+    download_root = _get_dl(download_id).get('download_root') or os.path.realpath(DOWNLOAD_DIR)
+    if download_root != os.path.realpath(DOWNLOAD_DIR):
+        raise ValueError('下载目录已改变，请在当前目录重试')
+    source_dir = _safe_name(SUPPORTED_SOURCES.get(source, {}).get('short', source)).strip('.') or 'Local'
+    sub = os.path.realpath(os.path.join(download_root, source_dir))
+    if os.path.commonpath((download_root, sub)) != download_root:
+        raise ValueError('下载子目录不在当前下载目录内')
     os.makedirs(sub, exist_ok=True)
     target = _get_dl(download_id).get('format')
     ext = target or re.sub(r'[^a-z0-9]', '', str(song.ext).lower()) or 'mp3'
@@ -614,6 +757,23 @@ def run_download(download_id, token):
     _set_dl(download_id, name=fname, path=path, tmp_path=tmp,
             download_root=download_root, published=False)
     _check_download_cancelled(download_id)
+
+    if entry.get('local_relative'):
+        try:
+            original_path = _local_audio_path(entry['local_relative'])
+            stat = os.stat(original_path)
+            if stat.st_size != entry['local_size'] or stat.st_mtime_ns != entry['local_mtime_ns']:
+                raise ValueError('原文件已改变，请刷新资料库后重新导出')
+            _set_dl(download_id, status='downloading', total=stat.st_size, downloaded=0)
+            with open(original_path, 'rb') as src, open(tmp, 'wb') as dst:
+                while chunk := src.read(256 * 1024):
+                    _check_download_cancelled(download_id)
+                    dst.write(chunk)
+            _finish_download(download_id, entry, tmp, path)
+        finally:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        return
 
     cached_total = None
     try:
@@ -791,6 +951,10 @@ def _run_download_job(download_id, token):
     global DOWNLOAD_ACTIVE
     try:
         run_download(download_id, token)
+    except InterruptedError:
+        pass
+    except Exception as err:
+        _set_dl(download_id, status='error', message=str(err))
     finally:
         with DL_LOCK:
             cancelled = download_id in DOWNLOAD_CANCELLED
@@ -877,6 +1041,8 @@ def _library_tracks():
                 continue
             path = os.path.join(directory, name)
             try:
+                if not Path(path).resolve().is_relative_to(Path(root).resolve()):
+                    continue
                 stat = os.stat(path)
             except OSError:
                 continue
@@ -889,18 +1055,20 @@ def _library_tracks():
             metadata = _read_download_metadata(path)
             tracks.append({
                 'token': 'local-' + hashlib.sha256(relative.encode()).hexdigest()[:16],
-                'song_name': metadata.get('song_name') or song_name,
-                'singers': metadata.get('singers') or singers,
-                'album': metadata.get('album', ''),
-                'duration': metadata.get('duration', ''),
+                'song_name': _display_text(metadata.get('song_name'), song_name),
+                'singers': _display_text(metadata.get('singers'), singers),
+                'album': _display_text(metadata.get('album')),
+                'duration': _display_text(metadata.get('duration')),
                 'lyric': _read_download_lyric(path) or metadata.get('lyric', ''),
                 'source': source,
+                'source_label': _source_label(metadata.get('source') or source),
                 'ext': ext,
                 'file_size_bytes': stat.st_size,
                 'modified': stat.st_mtime,
                 'relative': relative,
                 'has_cover': bool(_existing_download_cover(path, metadata)),
                 'local': True,
+                'identity': metadata.get('identity', ''),
             })
     return sorted(tracks, key=lambda track: track['modified'], reverse=True)
 
@@ -1077,18 +1245,99 @@ def api_download():
     if not entry:
         return jsonify({'error': '曲目已过期，请重新搜索'}), 404
     target = data.get('format')
+    if not isinstance(data.get('duplicate', False), bool):
+        return jsonify({'error': '无效的重复下载选项'}), 400
     if 'format' in data:
         if target not in ('mp3', 'flac'):
             return jsonify({'error': '仅支持 MP3 和原始 FLAC'}), 400
-        original = str(entry['song_info'].ext or '').lower().lstrip('.')
-        if target == 'flac' and original != 'flac':
-            return jsonify({'error': '该曲目没有原始 FLAC'}), 400
-        if target == 'mp3' and original != 'mp3' and not audio_formats.can_convert():
-            return jsonify({'error': '转换需要安装 FFmpeg 和 FFprobe'}), 503
+        try:
+            result, status = _submit_download(token, entry, target, data.get('duplicate', False))
+        except ValueError as err:
+            return jsonify({'error': str(err)}), 409
+        return jsonify(result), status
     download_id = uuid.uuid4().hex[:16]
     _set_dl(download_id, name=str(entry['song_info'].song_name), format=target)
     _enqueue_download(download_id, token)
     return jsonify({'download_id': download_id})
+
+
+@app.route('/api/download/plan', methods=['POST'])
+def api_download_plan():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get('format') not in ('mp3', 'flac'):
+        return jsonify({'error': '请选择 MP3 或原始 FLAC'}), 400
+    tokens = data.get('tokens')
+    if (not isinstance(tokens, list) or not 1 <= len(tokens) <= 200
+            or not all(isinstance(token, str) and token for token in tokens)):
+        return jsonify({'error': '请选择 1–200 首歌曲'}), 400
+    library = _library_tracks()
+    items = [_download_plan_item(token, REGISTRY.get(token), data['format'], library)
+             for token in dict.fromkeys(tokens)]
+    return jsonify({'items': items})
+
+
+@app.route('/api/library/export', methods=['POST'])
+def api_library_export():
+    data = request.get_json(silent=True)
+    if (not isinstance(data, dict) or data.get('format') != 'mp3'
+            or not isinstance(data.get('duplicate', False), bool)):
+        return jsonify({'error': '本地导出仅支持 MP3'}), 400
+    try:
+        entry = _local_entry(data.get('relative'))
+        if entry['song_info'].ext == 'mp3':
+            return jsonify({'error': '该文件已经是 MP3，可直接使用'}), 400
+        token = REGISTRY.add_local(entry)
+        result, status = _submit_download(token, entry, 'mp3', data.get('duplicate', False))
+        return jsonify(result), status
+    except (ValueError, OSError) as err:
+        return jsonify({'error': str(err)}), 400
+
+
+def _public_download(ident, rec):
+    result = {key: rec[key] for key in (
+        'name', 'song_name', 'singers', 'format', 'status', 'message', 'downloaded',
+        'total', 'speed', 'conversion_progress', 'updated', 'token',
+    ) if key in rec}
+    result['download_id'] = ident
+    if rec.get('status') == 'done' and rec.get('path') and os.path.isfile(rec['path']):
+        result['file_url'] = url_for('api_file', download_id=ident)
+        if rec.get('download_root') == os.path.realpath(DOWNLOAD_DIR):
+            result['relative'] = rec.get('relative')
+    return result
+
+
+@app.route('/api/downloads')
+def api_downloads():
+    with DL_LOCK:
+        records = [(ident, dict(rec)) for ident, rec in DOWNLOADS.items() if rec.get('status') != 'cancelled']
+    records.sort(key=lambda item: item[1].get('updated', 0), reverse=True)
+    active = [item for item in records if item[1].get('status') not in DOWNLOAD_TERMINAL]
+    recent = [item for item in records if item[1].get('status') in DOWNLOAD_TERMINAL][:100]
+    return jsonify({'tasks': [_public_download(ident, rec) for ident, rec in active + recent]})
+
+
+@app.route('/api/download/<download_id>/retry', methods=['POST'])
+def api_retry_download(download_id):
+    rec = _get_dl(download_id)
+    if rec.get('status') != 'error':
+        return jsonify({'error': '只有失败的任务可以重试'}), 409
+    entry = REGISTRY.get(rec.get('token'))
+    if not entry:
+        return jsonify({'error': '曲目已过期，请重新搜索'}), 404
+    if rec.get('download_root') != os.path.realpath(DOWNLOAD_DIR):
+        return jsonify({'error': '下载目录已改变，请从当前目录重新操作'}), 409
+    try:
+        if entry.get('local_relative'):
+            entry = _local_entry(entry['local_relative'])
+            token = REGISTRY.add_local(entry)
+        else:
+            token = rec['token']
+        result, status = _submit_download(token, entry, rec['format'])
+        if status == 200:
+            _cancel_download(download_id)
+        return jsonify(result), status
+    except (ValueError, OSError) as err:
+        return jsonify({'error': str(err)}), 409
 
 
 @app.route('/api/download/formats')
@@ -1118,7 +1367,7 @@ def api_download_progress(download_id):
             if not rec:
                 yield 'event: error\ndata: {"message":"unknown download"}\n\n'
                 return
-            yield f'event: progress\ndata: {json.dumps(rec, ensure_ascii=False)}\n\n'
+            yield f'event: progress\ndata: {json.dumps(_public_download(download_id, rec), ensure_ascii=False)}\n\n'
             if rec.get('status') in ('done', 'error', 'cancelled'):
                 return
             time.sleep(0.3)
@@ -1201,6 +1450,7 @@ def api_library_file(relative):
     return send_file(
         path, conditional=True,
         mimetype=RESULT_EXT_TO_MIME.get(ext, 'application/octet-stream'),
+        as_attachment=request.args.get('download') == '1',
     )
 
 

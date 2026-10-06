@@ -19,8 +19,9 @@
   </div>
 
   <nav class="navigation" aria-label="资料库">
-    <button class="nav-item selected" id="browseButton" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>搜索音乐</button>
-    <button class="nav-item" id="downloadsButton" type="button" aria-controls="dlDrawer" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg>下载与资料库<span class="badge">0</span></button>
+    <button class="nav-item selected" id="browseButton" type="button" aria-label="搜索音乐" aria-controls="searchView" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><span class="nav-label">搜索音乐</span><span class="nav-short" aria-hidden="true">搜索</span></button>
+    <button class="nav-item" id="libraryButton" type="button" aria-label="本地音乐" aria-controls="libraryView"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17V5l11-2v12M9 9l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="17" cy="16" rx="3" ry="2"/></svg><span class="nav-label">本地音乐</span><span class="nav-short" aria-hidden="true">本地</span></button>
+    <button class="nav-item" id="downloadsButton" type="button" aria-label="下载任务" aria-controls="dlDrawer" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg><span class="nav-label">下载任务</span><span class="nav-short" aria-hidden="true">下载</span><span class="badge">0</span></button>
   </nav>
   <section class="sourcebar" aria-labelledby="sourceLabel">
     <h2 class="sidebar-label" id="sourceLabel">音乐来源 <span>可多选</span></h2>
@@ -46,15 +47,23 @@
 </header>
 
 <main class="results-wrap">
+  <section id="searchView" aria-labelledby="pageTitle">
   <div class="page-heading"><div><p class="eyebrow">YOUR MUSIC, YOUR MOMENT</p><h1 id="pageTitle">搜索音乐</h1></div><span class="sourcebar-hint" id="searchStatus" role="status" aria-live="polite"></span></div>
   <div class="source-status-list" id="sourceStatusList" aria-label="音乐来源搜索状态" aria-live="polite" hidden></div>
   <section class="spotlight" id="spotlight" hidden aria-label="首个搜索结果">
     <div class="spotlight-cover" id="spotlightCover"></div>
-    <div class="spotlight-copy"><p class="eyebrow">从这首开始</p><h2 id="spotlightTitle"></h2><p id="spotlightArtist"></p><button class="primary-button" id="spotlightPlay" type="button">播放歌曲</button></div>
+    <div class="spotlight-copy"><p class="eyebrow">从这首开始</p><h2 id="spotlightTitle"></h2><p id="spotlightArtist"></p></div><button class="primary-button" id="spotlightPlay" type="button">播放歌曲</button>
   </section>
   <div class="results-toolbar" id="resultsToolbar" hidden>
     <label class="select-all"><input type="checkbox" id="selectAll">全选</label>
     <span id="selectionCount">0 首歌曲</span>
+    <label class="download-preference">下载格式
+      <select id="downloadFormatPreference" aria-label="默认下载格式">
+        <option value="mp3">MP3 · 通用</option>
+        <option value="flac">原始 FLAC</option>
+        <option value="ask">每次选择</option>
+      </select>
+    </label>
     <button type="button" id="playAll">播放全部</button>
     <button type="button" id="downloadSelected" disabled>下载所选</button>
   </div>
@@ -75,6 +84,19 @@
     <div class="empty-copy"><span class="eyebrow">听见喜欢，留住热爱</span><h2>下一首循环，<br>从这里开始。</h2><p>搜索一首歌、一位艺人，<br>把此刻的心情放进音乐里。</p></div>
     <div class="search-suggestions"><span>试试搜索</span><button type="button" data-query="周杰伦">周杰伦 <span>↗</span></button><button type="button" data-query="陈奕迅">陈奕迅 <span>↗</span></button><button type="button" data-query="爵士">爵士 <span>↗</span></button><button type="button" data-query="纯音乐">纯音乐 <span>↗</span></button></div>
   </div>
+  </section>
+  <section id="libraryView" aria-labelledby="libraryTitle" hidden>
+    <div class="page-heading"><div><p class="eyebrow">YOUR LOCAL COLLECTION</p><h1 id="libraryTitle">本地音乐</h1></div><button id="refreshLibrary" class="text-button" type="button">刷新文件</button></div>
+    <p class="library-directory">当前目录 <span id="libraryDirectory">正在读取…</span></p>
+    <div class="library-toolbar">
+      <label class="library-search" for="librarySearch">查找本地音乐<input id="librarySearch" type="search" placeholder="歌名、歌手或专辑" autocomplete="off"></label>
+      <label for="libraryFormat">格式<select id="libraryFormat"><option value="">全部格式</option><option value="mp3">MP3</option><option value="flac">FLAC</option><option value="wav">WAV</option><option value="m4a">M4A</option><option value="aac">AAC</option><option value="ogg">OGG</option><option value="ape">APE</option></select></label>
+      <label for="librarySort">排序<select id="librarySort"><option value="recent">最近保存</option><option value="title">歌名</option><option value="artist">歌手</option></select></label>
+    </div>
+    <div class="library-summary"><span id="libraryCount" role="status" aria-live="polite">正在读取…</span><button id="clearLibraryFilters" class="text-button" type="button" hidden>清除筛选</button><button id="playLibrary" class="text-button" type="button" disabled>播放筛选结果</button></div>
+    <p class="library-error" id="libraryError" role="status" hidden></p>
+    <ul class="library-list" id="libraryList"><li class="dl-empty">正在读取本地音乐…</li></ul>
+  </section>
 </main>
 
 <!-- Lyrics panel -->
@@ -87,9 +109,9 @@
 </aside>
 
 <!-- Downloads drawer -->
-<aside class="dl-drawer" id="dlDrawer" aria-label="下载与资料库" inert>
+<aside class="dl-drawer" id="dlDrawer" aria-label="下载任务" inert>
   <div class="dl-head">
-    <span>下载与资料库</span>
+    <span>下载任务</span>
     <button id="dlClose" aria-label="关闭下载面板">✕</button>
   </div>
   <div class="dl-folder">
@@ -109,20 +131,26 @@
       <option value="5">5 首</option>
     </select>
   </label>
+  <details class="conversion-help">
+    <summary>MP3 转换工具 <span id="conversionStatus">点击检测</span></summary>
+    <p>原始 MP3/FLAC 可直接保存。其他音频转 MP3 需要在运行声轨的电脑安装 FFmpeg 和 FFprobe（含 libmp3lame 编码器）。</p>
+    <p>macOS 可通过 Homebrew 安装：<code>brew install ffmpeg</code>；Windows 可从 FFmpeg 官网选择 Windows 构建，并将包含两个程序的 bin 目录加入 PATH。安装后重新打开声轨。</p>
+    <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener noreferrer">FFmpeg 官方下载说明</a>
+    <button id="checkConversion" type="button">重新检测</button>
+  </details>
   <div class="dl-scroll">
     <section class="dl-section">
-      <div class="dl-section-title">下载中</div>
+      <div class="dl-section-title">下载任务 <button id="retryFailed" type="button" disabled>重试失败项</button></div>
       <ul class="dl-list" id="dlList">
         <li class="dl-empty">暂无下载任务</li>
       </ul>
     </section>
     <section class="dl-section">
-      <div class="dl-section-title">已下载 <span id="libraryCount">0</span></div>
-      <ul class="library-list" id="libraryList">
-        <li class="dl-empty">暂无已下载歌曲</li>
-      </ul>
+      <div class="dl-section-title">最近完成 <small>本次运行</small></div>
+      <ul class="dl-list" id="recentList"><li class="dl-empty">完成后可在这里找到文件</li></ul>
     </section>
   </div>
+  <button id="openLocalLibrary" class="drawer-library-link" type="button">查看本地音乐 →</button>
 </aside>
 
 <aside class="queue-panel" id="queuePanel" aria-label="播放队列" inert>
@@ -182,6 +210,18 @@
     </fieldset>
     <p class="format-help" id="downloadFormatHelp" role="status"></p>
     <div class="format-actions"><button type="button" id="downloadFormatCancel">取消</button><button class="format-confirm" id="downloadFormatConfirm" value="download">下载</button></div>
+  </form>
+</dialog>
+<dialog class="format-dialog plan-dialog" id="downloadPlanDialog" aria-labelledby="downloadPlanTitle" aria-describedby="downloadPlanSummary">
+  <form method="dialog">
+    <div class="format-heading"><h2 id="downloadPlanTitle">确认下载</h2><button type="button" id="downloadPlanClose" aria-label="关闭下载确认">✕</button></div>
+    <p class="format-help" id="downloadPlanSummary"></p>
+    <ul class="download-plan-list" id="downloadPlanList"></ul>
+    <div class="format-actions">
+      <button value="cancel">取消</button>
+      <button id="downloadPlanCopy" value="copy" hidden>全部另存一份</button>
+      <button class="format-confirm" id="downloadPlanConfirm" value="skip">下载未保存的歌曲</button>
+    </div>
   </form>
 </dialog>
 <audio id="audio" crossorigin="anonymous"></audio>

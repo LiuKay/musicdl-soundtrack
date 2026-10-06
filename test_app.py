@@ -12,6 +12,43 @@ import desktop
 
 
 class SearchCompatibilityTest(unittest.TestCase):
+    def test_payload_cleans_exact_placeholders_without_changing_versions(self):
+        song = SimpleNamespace(source='MiguMusicClient', ext='.FLAC', song_name='晴天（Live 2026）',
+                               singers='Alice', album=' NULL ', file_size='N/A', duration='None',
+                               cover_url=None, lyric='')
+        payload = app._track_payload(song, 'token')
+        self.assertEqual(payload['song_name'], '晴天（Live 2026）')
+        self.assertEqual(payload['source_label'], '咪咕音乐')
+        self.assertEqual([payload[key] for key in ('album', 'file_size', 'duration', 'cover_url')], [''] * 4)
+        self.assertEqual(app._display_text('None Shall Pass'), 'None Shall Pass')
+        song.song_name, song.singers = 'null', 'undefined'
+        self.assertEqual(app._track_payload(song, 'token')['song_name'], '未知曲目')
+        self.assertEqual(app._track_payload(song, 'token')['singers'], '未知艺人')
+
+    def test_source_labels_accept_provider_ids_and_saved_folder_names(self):
+        for source in ['Migu', 'MIGU', 'MiguMusicClient', '咪咕音乐']:
+            self.assertEqual(app._source_label(source), '咪咕音乐')
+        self.assertEqual(app._source_label('Netease'), '网易云音乐')
+        self.assertEqual(app._source_label('MyCollection'), 'MyCollection')
+
+    def test_library_display_cleanup_preserves_files_and_stored_identity(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(app, 'DOWNLOAD_DIR', tmp):
+            folder = Path(tmp, 'Migu')
+            folder.mkdir()
+            audio = folder / '晴天（伴奏版） - Alice.mp3'
+            audio.write_bytes(b'audio')
+            metadata = Path(str(audio) + '.soundtrack.json')
+            original = json.dumps({'song_name': 'NULL', 'singers': 'none', 'album': 'undefined', 'identity': 'stable'})
+            metadata.write_text(original)
+            track = app._library_tracks()[0]
+            self.assertEqual(track['song_name'], '晴天（伴奏版）')
+            self.assertEqual(track['singers'], 'Alice')
+            self.assertEqual(track['album'], '')
+            self.assertEqual(track['source_label'], '咪咕音乐')
+            self.assertEqual(track['identity'], 'stable')
+            self.assertEqual(metadata.read_text(), original)
+            self.assertEqual(audio.read_bytes(), b'audio')
+
     def test_music_clients_use_absolute_cache_workspace_from_read_only_cwd(self):
         with tempfile.TemporaryDirectory() as tmp:
             resources = Path(tmp, 'Resources')

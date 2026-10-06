@@ -10,6 +10,9 @@ let queue = [];                    // ordered tokens (play order)
 let activeQueue = [];              // independent from search results
 let libraryQueue = [];
 let libraryRequestId = 0;
+let libraryLoaded = false;
+let libraryLoading = false;
+let libraryErrorMessage = '';
 let shuffleEnabled = false;
 let shuffleOrder = [];
 let repeatMode = 'off';            // off | all | one
@@ -23,6 +26,17 @@ let currentToken = null;
 let searchES = null;
 let sources = [];
 let desktopReady = false;
+const downloadTasks = new Map();
+let downloadPlanning = false;
+let markerTimer;
+let markerRequestId = 0;
+const formatPreference = $('#downloadFormatPreference');
+const savedFormat = localStorage.getItem('soundtrack-download-format');
+if (['mp3', 'flac', 'ask'].includes(savedFormat)) formatPreference.value = savedFormat;
+formatPreference.onchange = () => {
+  localStorage.setItem('soundtrack-download-format', formatPreference.value);
+  scheduleDownloadMarkers();
+};
 
 const cacheToggle = $('#cacheToggle');
 const cacheLimit = $('#cacheLimit');
@@ -93,7 +107,27 @@ $('#searchForm').addEventListener('submit', (e) => { e.preventDefault(); runSear
 document.querySelectorAll('[data-query]').forEach(button => {
   button.onclick = () => { $('#searchInput').value = button.dataset.query; runSearch(); };
 });
-$('#browseButton').onclick = () => { setPanel(null); $('#searchInput').focus(); };
+$('#browseButton').onclick = () => { setView('search'); $('#searchInput').focus(); };
+
+function setView(view) {
+  setPanel(null);
+  for (const [name, button] of [['search', 'browseButton'], ['library', 'libraryButton']]) {
+    const selected = view === name;
+    $('#' + name + 'View').hidden = !selected;
+    $('#' + button).classList.toggle('selected', selected);
+    if (selected) $('#' + button).setAttribute('aria-current', 'page');
+    else $('#' + button).removeAttribute('aria-current');
+  }
+  document.body.dataset.view = view;
+  $('.results-wrap').scrollTop = 0;
+}
+
+async function openLibrary() {
+  setView('library');
+  $('#librarySearch').focus();
+  await loadLibrary();
+}
+$('#libraryButton').onclick = $('#openLocalLibrary').onclick = openLibrary;
 
 function showSearchMessage(title, message) {
   $('#resultsHead').hidden = true;
@@ -105,6 +139,7 @@ function showSearchMessage(title, message) {
 function runSearch() {
   const q = $('#searchInput').value.trim();
   if (!q) return;
+  setView('search');
   if (searchES) { searchES.close(); searchES = null; }
 
   queue = [];
@@ -164,6 +199,7 @@ function runSearch() {
     finished = true;
     es.close(); searchES = null;
     $('#searchBtn').disabled = false;
+    scheduleDownloadMarkers();
     if (count === 0) {
       const failed = [...sourceStates.values()].some(s => ['error', 'warning'].includes(s.state));
       showSearchMessage(failed ? '部分来源未能完成搜索' : '没有找到结果',
@@ -227,7 +263,7 @@ $('#selectAll').onchange = e => {
   updateSelection();
 };
 async function downloadSelected() {
-  if (batchDownloading) return;
+  if (batchDownloading || downloadPlanning) return;
   const tokens = queue.filter(token => selectedTokens.has(token));
   if (!tokens.length) return;
   batchDownloading = true;
@@ -236,10 +272,14 @@ async function downloadSelected() {
   let started = 0;
   let format = null;
   try {
-    format = await chooseDownloadFormat(tokens);
+    format = formatPreference.value === 'ask' ? await chooseDownloadFormat(tokens) : formatPreference.value;
     if (!format) return;
-    for (const token of tokens) {
-      if (await startDownload(token, null, format)) { started++; selectedTokens.delete(token); }
+    const plan = await planDownloads(tokens, format);
+    if (!plan) return;
+    for (const item of plan.items) {
+      if (item.status === 'active') { setPanel('dlDrawer'); await restoreDownloads(); continue; }
+      if (item.status !== 'ready' && !(item.status === 'existing' && plan.duplicate && item.can_download !== false)) continue;
+      if (await startDownload(item.token, null, format, plan.duplicate)) { started++; selectedTokens.delete(item.token); }
     }
   } finally {
     batchTokens.clear();
@@ -247,7 +287,7 @@ async function downloadSelected() {
     document.querySelectorAll('.row').forEach(row => { row.querySelector('.row-select').checked = selectedTokens.has(row.dataset.token); });
     updateSelection();
     pruneTracks();
-    if (format) toast(`已添加 ${started} / ${tokens.length} 首到下载任务`);
+    if (started) toast(`已添加 ${started} / ${tokens.length} 首；已保存或不可下载项未重复添加`);
   }
 }
 $('#downloadSelected').onclick = downloadSelected;
@@ -291,13 +331,14 @@ function addRow(t) {
       <span class="eq"><i></i><i></i><i></i></span>
     </div>
     <div class="r-title">
-      <div class="name">${esc(t.song_name)}</div>
+      <div class="name" title="${esc(t.song_name)}">${esc(t.song_name)}</div>
       <div class="artist">${esc(t.singers)}</div>
+      <div class="track-download-meta"><span>${esc(originalFormat(t).toUpperCase())}</span><span class="download-state"></span></div>
     </div>
-    <div class="r-album">${esc(t.album) || '—'}</div>
+    <div class="r-album" title="${esc(t.album)}">${esc(t.album) || '—'}</div>
     <div class="r-dur">${esc(t.duration) || '—'}</div>
     <div class="r-size ${t.lossless ? 'lossless' : ''}">${esc(t.file_size) || '—'}</div>
-    <div class="r-src"><span class="tag">${esc(t.source)}</span></div>
+    <div class="r-src"><span class="tag" title="${esc(t.source_label || t.source)}">${esc(t.source_label || t.source)}</span></div>
     <div class="r-act">
       <button class="a-play" title="播放" aria-label="播放 ${esc(t.song_name)}">${ICON_PLAY}</button>
       <button class="a-next" title="下一首播放" aria-label="下一首播放 ${esc(t.song_name)}">${ICON_QUEUE}</button>
@@ -312,6 +353,7 @@ function addRow(t) {
   };
   li.ondblclick = e => { if (!e.target.closest('button, input, label')) play(t.token); };
   $('#results').appendChild(li);
+  scheduleDownloadMarkers();
 }
 
 const ICON_PLAY = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>`;
@@ -660,17 +702,22 @@ let dlCount = 0;
 const fab = $('#downloadsButton');
 fab.onclick = () => {
   setPanel($('#dlDrawer').classList.contains('open') ? null : 'dlDrawer');
-  if ($('#dlDrawer').classList.contains('open')) loadLibrary();
+  if ($('#dlDrawer').classList.contains('open')) { loadLibrary(); restoreDownloads(); }
 };
 $('#dlClose').onclick = () => setPanel(null);
 
 async function loadLibrary() {
   const requestId = ++libraryRequestId;
-  const list = $('#libraryList');
+  libraryLoading = true;
+  $('#refreshLibrary').disabled = true;
+  renderLibrary();
   try {
-    const data = await fetch('/api/library').then(r => r.json());
+    const response = await fetch('/api/library');
+    if (!response.ok) throw new Error();
+    const data = await response.json();
     if (requestId !== libraryRequestId) return;
     $('#downloadDir').textContent = data.directory;
+    $('#libraryDirectory').textContent = data.directory;
     const validLocal = new Set(data.tracks.map(t => t.token));
     for (const token of libraryQueue) {
       if (!validLocal.has(token)) {
@@ -681,28 +728,84 @@ async function loadLibrary() {
       }
     }
     libraryQueue = [];
-    list.innerHTML = '';
-    $('#libraryCount').textContent = data.tracks.length;
-    if (!data.tracks.length) {
-      list.innerHTML = '<li class="dl-empty">暂无已下载歌曲</li>';
-      renderQueue();
-      return;
-    }
     data.tracks.forEach(t => {
       tracks.set(t.token, t);
       libraryQueue.push(t.token);
+    });
+    libraryLoaded = true;
+    libraryErrorMessage = '';
+    renderQueue();
+    pruneTracks();
+    scheduleDownloadMarkers();
+  } catch {
+    if (requestId !== libraryRequestId) return;
+    libraryErrorMessage = libraryLoaded ? '读取目录失败，当前显示上次读取的文件。请点击“刷新文件”重试。' : '读取目录失败，请点击“刷新文件”重试。';
+  } finally {
+    if (requestId === libraryRequestId) {
+      libraryLoading = false;
+      $('#refreshLibrary').disabled = false;
+      renderLibrary();
+    }
+  }
+}
+
+function selectLibraryTracks(items, query, format, sort) {
+  const fold = value => String(value || '').normalize('NFKC').toLocaleLowerCase();
+  const words = fold(query).trim().split(/\s+/).filter(Boolean);
+  const selected = items.filter(t => {
+    if (format && originalFormat(t) !== format) return false;
+    const text = fold([t.song_name, t.singers, t.album, t.source_label].join(' '));
+    return words.every(word => text.includes(word));
+  });
+  const compareText = (a, b) => String(a || '').localeCompare(String(b || ''), 'zh-CN', { numeric: true });
+  return selected.sort((a, b) => {
+    let result = sort === 'title' ? compareText(a.song_name, b.song_name)
+      : sort === 'artist' ? compareText(a.singers, b.singers) : (b.modified || 0) - (a.modified || 0);
+    return result || compareText(a.song_name, b.song_name) || compareText(a.relative, b.relative);
+  });
+}
+
+function visibleLibraryTracks() {
+  return selectLibraryTracks(libraryQueue.map(token => tracks.get(token)).filter(Boolean),
+    $('#librarySearch').value, $('#libraryFormat').value, $('#librarySort').value);
+}
+
+function renderLibrary() {
+  const list = $('#libraryList');
+  const visible = visibleLibraryTracks();
+  const playQueue = visible.map(t => t.token);
+  const filtered = Boolean($('#librarySearch').value.trim() || $('#libraryFormat').value);
+  $('#libraryCount').textContent = libraryLoading ? '正在读取…'
+    : `${visible.length} / ${libraryQueue.length} 首${filtered ? ' · 已筛选' : ''}`;
+  $('#clearLibraryFilters').hidden = !filtered;
+  $('#playLibrary').disabled = !visible.length;
+  $('#libraryError').hidden = !libraryErrorMessage;
+  $('#libraryError').textContent = libraryErrorMessage;
+  list.replaceChildren();
+  if (!visible.length) {
+    const message = libraryLoading && !libraryLoaded ? '正在读取本地音乐…'
+      : !libraryLoaded && libraryErrorMessage ? '暂时无法显示本地音乐'
+      : !libraryQueue.length ? '还没有本地音乐。下载完成后会出现在这里。'
+      : '没有符合条件的歌曲，试试其他关键词或清除筛选。';
+    list.innerHTML = `<li class="dl-empty">${message}</li>`;
+    return;
+  }
+  visible.forEach(t => {
       const li = document.createElement('li');
       li.className = 'library-item' + (desktopReady ? ' desktop' : '') + (currentToken === t.token ? ' playing' : '');
       li.dataset.token = t.token;
       li.innerHTML = `
         <div class="library-meta">
-          <div class="library-name">${esc(t.song_name)}</div>
-          <div class="library-sub">${esc(t.singers) || esc(t.source) || '本地音频'} · ${mb(t.file_size_bytes)}</div>
+          <div class="library-name" title="${esc(t.song_name)}">${esc(t.song_name)}</div>
+          <div class="library-sub">${esc([t.singers, t.album, t.source_label || t.source].filter(Boolean).join(' · ')) || '本地音频'}</div>
         </div>
+        <div class="library-format">${esc(t.ext.toUpperCase())}<small>${mb(t.file_size_bytes)}</small></div>
         <button class="library-play" type="button" aria-label="播放 ${esc(t.song_name)}">${ICON_PLAY}</button>
         <button class="library-reveal" type="button" aria-label="在文件夹中显示 ${esc(t.song_name)}" ${desktopReady ? '' : 'hidden'}>${ICON_FOLDER}</button>
-        <button class="library-delete" type="button" aria-label="删除 ${esc(t.song_name)}">${ICON_TRASH}</button>`;
-      li.querySelector('.library-play').onclick = () => play(t.token, libraryQueue);
+        <button class="library-delete" type="button" aria-label="删除本地文件 ${esc(t.song_name)}">${ICON_TRASH}</button>
+        <div class="library-actions"><button class="library-export" type="button" aria-label="导出 MP3 ${esc(t.song_name)}" ${t.ext === 'mp3' ? 'hidden' : ''}>导出 MP3</button><a href="${esc(t.stream_url)}?download=1" aria-label="保存到设备 ${esc(t.song_name)}" download>保存到设备</a></div>`;
+      li.querySelector('.library-play').onclick = () => play(t.token, playQueue);
+      li.querySelector('.library-export').onclick = e => exportLocalMp3(t, e.currentTarget);
       li.querySelector('.library-reveal').onclick = async () => {
         try {
           const revealed = await window.pywebview.api.reveal_downloaded_file(t.relative);
@@ -713,7 +816,8 @@ async function loadLibrary() {
       };
       li.querySelector('.library-delete').onclick = async (e) => {
         if (!confirm(`删除“${t.song_name}”及其本地文件？`)) return;
-        e.currentTarget.disabled = true;
+        const button = e.currentTarget;
+        button.disabled = true;
         try {
           if (currentToken === t.token) clearLocalPlayback();
           const response = await fetch(t.delete_url, { method: 'DELETE' });
@@ -721,20 +825,28 @@ async function loadLibrary() {
           await loadLibrary();
           toast('已删除：' + t.song_name);
         } catch {
-          e.currentTarget.disabled = false;
+          button.disabled = false;
           toast('删除失败');
         }
       };
-      li.ondblclick = (e) => { if (!e.target.closest('button')) play(t.token, libraryQueue); };
+      li.ondblclick = (e) => { if (!e.target.closest('button, a')) play(t.token, playQueue); };
       list.appendChild(li);
-    });
-    renderQueue();
-    pruneTracks();
-  } catch {
-    if (requestId !== libraryRequestId) return;
-    list.innerHTML = '<li class="dl-empty">读取下载目录失败</li>';
-  }
+  });
 }
+
+$('#librarySearch').oninput = renderLibrary;
+$('#libraryFormat').onchange = $('#librarySort').onchange = renderLibrary;
+$('#refreshLibrary').onclick = loadLibrary;
+$('#clearLibraryFilters').onclick = () => {
+  $('#librarySearch').value = '';
+  $('#libraryFormat').value = '';
+  renderLibrary();
+  $('#librarySearch').focus();
+};
+$('#playLibrary').onclick = () => {
+  const tokens = visibleLibraryTracks().map(t => t.token);
+  if (tokens.length) play(tokens[0], tokens);
+};
 
 function clearLocalPlayback() {
   activeQueue = activeQueue.filter(token => token !== currentToken);
@@ -747,6 +859,21 @@ function clearLocalPlayback() {
   $('#npTitle').textContent = '未在播放';
   $('#npArtist').textContent = '选择一首歌开始';
   showNoLyrics();
+  renderQueue();
+}
+
+function invalidateLibrary() {
+  ++libraryRequestId; // Ignore any response started against the previous directory.
+  if (tracks.get(currentToken)?.local) clearLocalPlayback();
+  const local = new Set([...tracks].filter(([, t]) => t.local).map(([token]) => token));
+  activeQueue = activeQueue.filter(token => !local.has(token));
+  shuffleOrder = shuffleOrder.filter(token => !local.has(token));
+  for (const token of local) tracks.delete(token);
+  libraryQueue = [];
+  libraryLoaded = false;
+  libraryLoading = false;
+  libraryErrorMessage = '';
+  renderLibrary();
   renderQueue();
 }
 
@@ -764,8 +891,9 @@ $('#chooseDownloadDir').onclick = async () => {
   try {
     const path = await window.pywebview.api.choose_download_dir();
     if (!path) return;
-    if (tracks.get(currentToken)?.local) clearLocalPlayback();
+    invalidateLibrary();
     $('#downloadDir').textContent = path;
+    $('#libraryDirectory').textContent = path;
     await loadLibrary();
     toast('下载目录已更新');
   } catch {
@@ -832,13 +960,190 @@ async function chooseDownloadFormat(tokens) {
   });
 }
 
-async function requestDownload(token, btn) {
-  if (downloadingTokens.has(token)) return;
-  const format = await chooseDownloadFormat([token]);
-  if (format) await startDownload(token, btn, format);
+async function locateFile(file) {
+  if (desktopReady && file.relative) {
+    try {
+      if (await window.pywebview.api.reveal_downloaded_file(file.relative)) return;
+    } catch {}
+    toast('文件未找到，请刷新资料库');
+    await loadLibrary();
+    return;
+  }
+  const url = file.file_url || `/api/library/file/${file.relative.split('/').map(encodeURIComponent).join('/')}?download=1`;
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = '';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
-async function startDownload(token, btn, format = 'mp3') {
+function downloadPlanLabel(item) {
+  if (item.status === 'existing') return `已下载 ${item.format.toUpperCase()} · 默认跳过`;
+  if (item.status === 'active') return '任务进行中 · 不重复添加';
+  if (item.status === 'unavailable') return item.error;
+  if (item.similar?.length) return '本地有同名歌曲，版本未确认 · 继续下载会保留两份';
+  if (item.local_source) return '从本地 FLAC 导出 MP3 · 保留原文件';
+  return item.conversion ? '需转换为 MP3' : '直接保存原始音频';
+}
+
+async function confirmDownloadPlan(items, format) {
+  const dialog = $('#downloadPlanDialog');
+  if (dialog.open) return null;
+  const ready = items.filter(item => item.status === 'ready');
+  const existing = items.filter(item => item.status === 'existing');
+  const active = items.filter(item => item.status === 'active');
+  const unavailable = items.filter(item => item.status === 'unavailable');
+  $('#downloadPlanTitle').textContent = items.length > 1 ? '批量下载预览' : existing.length ? '这首歌已经下载过' : '下载前确认';
+  $('#downloadPlanSummary').textContent = `${items.length} 首 · ${ready.filter(item => !item.conversion).length} 首直接保存 · ${ready.filter(item => item.conversion).length} 首转换 · ${existing.length} 首已有 ${format.toUpperCase()} · ${active.length} 首进行中 · ${unavailable.length} 首不可下载`;
+  const list = $('#downloadPlanList');
+  list.replaceChildren();
+  for (const item of items) {
+    const li = document.createElement('li');
+    const file = item.existing?.[0] || item.similar?.[0];
+    li.innerHTML = `<strong>${esc(item.song_name || '曲目已过期')}</strong><span>${esc(downloadPlanLabel(item))}</span>`;
+    if (file) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'plan-file';
+      button.textContent = `${desktopReady ? '显示文件' : '保存已有文件'} · ${file.ext.toUpperCase()} · ${mb(file.file_size_bytes)} · ${file.relative}`;
+      button.onclick = () => locateFile(file);
+      li.appendChild(button);
+    }
+    list.appendChild(li);
+  }
+  const primary = $('#downloadPlanConfirm');
+  primary.value = ready.length ? 'skip' : existing.length ? 'view' : active.length ? 'tasks' : 'cancel';
+  primary.textContent = ready.length ? `下载 ${ready.length} 首${existing.length ? '未保存歌曲' : ''}` : existing.length ? '查看已下载' : active.length ? '查看任务' : '关闭';
+  $('#downloadPlanCopy').hidden = !existing.some(item => item.can_download !== false);
+  $('#downloadPlanCopy').textContent = items.length === 1 ? '另存一份' : '包含已有歌曲，另存一份';
+  dialog.returnValue = '';
+  return new Promise(resolve => {
+    dialog.addEventListener('close', async () => {
+      const choice = dialog.returnValue;
+      if (choice === 'view') {
+        await openLibrary();
+      }
+      if (choice === 'tasks') { setPanel('dlDrawer'); await restoreDownloads(); }
+      resolve(['skip', 'copy'].includes(choice) ? choice : null);
+    }, { once: true });
+    dialog.showModal();
+  });
+}
+$('#downloadPlanClose').onclick = () => $('#downloadPlanDialog').close('cancel');
+
+async function planDownloads(tokens, format) {
+  if (downloadPlanning) return null;
+  downloadPlanning = true;
+  try {
+    const response = await fetch('/api/download/plan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokens, format })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '无法检查下载状态');
+    const needsReview = data.items.length > 1 || data.items.some(item => ['existing', 'unavailable'].includes(item.status) || item.similar?.length);
+    const choice = needsReview ? await confirmDownloadPlan(data.items, format) : 'skip';
+    return choice ? { items: data.items, duplicate: choice === 'copy' } : null;
+  } catch (err) {
+    toast(err.message || '无法检查下载状态，请重试');
+    return null;
+  } finally {
+    downloadPlanning = false;
+  }
+}
+
+function scheduleDownloadMarkers() {
+  clearTimeout(markerTimer);
+  const requestId = ++markerRequestId;
+  markerTimer = setTimeout(() => refreshDownloadMarkers(requestId), 250);
+}
+
+async function refreshDownloadMarkers(requestId) {
+  if (!queue.length) return;
+  const format = formatPreference.value === 'ask' ? 'mp3' : formatPreference.value;
+  try {
+    const response = await fetch('/api/download/plan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokens: queue.slice(0, 200), format })
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (requestId !== markerRequestId) return;
+    const states = new Map(data.items.map(item => [item.token, item]));
+    document.querySelectorAll('.row').forEach(row => {
+      const item = states.get(row.dataset.token);
+      if (!item) return;
+      const text = item.status === 'existing' ? `已下载 ${format.toUpperCase()}` : item.status === 'active' ? '下载中' : item.local_source ? '本地可导出' : '';
+      row.querySelector('.download-state').textContent = text;
+      row.querySelector('.a-dl').title = text || (formatPreference.value === 'ask' ? '选择下载格式' : `下载 ${format.toUpperCase()}`);
+      row.querySelector('.a-dl').setAttribute('aria-label', `${text || `下载 ${format.toUpperCase()}`} ${item.song_name}`);
+    });
+  } catch {} // Preflight on click remains authoritative if background status fails.
+}
+
+async function exportLocalMp3(track, button) {
+  button.disabled = true;
+  try {
+    const send = duplicate => fetch('/api/library/export', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relative: track.relative, format: 'mp3', duplicate })
+    });
+    let response = await send(false);
+    let data = await response.json();
+    if (data.code === 'already_downloaded') {
+      const choice = await confirmDownloadPlan([data], 'mp3');
+      if (choice !== 'copy') return;
+      response = await send(true);
+      data = await response.json();
+    }
+    if (!response.ok) throw new Error(data.error || '导出失败');
+    if (!downloadTasks.has(data.download_id)) {
+      trackDownload(data.download_id, addDlItem({ ...track, song_name: `${track.song_name} · MP3` }));
+    }
+    setPanel('dlDrawer');
+  } catch (err) {
+    toast(err.message || '导出失败');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function checkConversionTools() {
+  const status = $('#conversionStatus');
+  status.textContent = '检测中…';
+  try {
+    const response = await fetch('/api/download/formats');
+    if (!response.ok) throw new Error();
+    const data = await response.json();
+    status.textContent = data.mp3_conversion ? '可用' : '未安装或未找到';
+  } catch {
+    status.textContent = '检测失败，请重试';
+  }
+}
+$('#checkConversion').onclick = checkConversionTools;
+$('.conversion-help').addEventListener('toggle', e => { if (e.target.open) checkConversionTools(); });
+
+async function requestDownload(token, btn) {
+  if (downloadingTokens.has(token)) { setPanel('dlDrawer'); return; }
+  if (downloadPlanning || $('#downloadFormatDialog').open) return;
+  formatTokens.add(token);
+  try {
+    const format = formatPreference.value === 'ask' ? await chooseDownloadFormat([token]) : formatPreference.value;
+    if (!format) return;
+    const plan = await planDownloads([token], format);
+    if (!plan) return;
+    const item = plan.items[0];
+    if (item.status === 'active') { setPanel('dlDrawer'); await restoreDownloads(); return; }
+    if (item.status === 'ready' || (item.status === 'existing' && plan.duplicate && item.can_download !== false)) {
+      await startDownload(token, btn, format, plan.duplicate);
+    }
+  } finally {
+    formatTokens.delete(token);
+  }
+}
+
+async function startDownload(token, btn, format = 'mp3', duplicate = false) {
   const t = tracks.get(token);
   if (!t || downloadingTokens.has(token)) return false;
   downloadingTokens.add(token);
@@ -853,11 +1158,13 @@ async function startDownload(token, btn, format = 'mp3') {
   try {
     const res = await fetch('/api/download', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, format })
+      body: JSON.stringify({ token, format, duplicate })
     }).then(r => r.json());
     if (res.error || !res.download_id) { toast(res.error || '下载启动失败'); release(); return false; }
+    if (downloadTasks.has(res.download_id)) { release(); setPanel('dlDrawer'); return true; }
     const item = addDlItem({ ...t, song_name: `${t.song_name} · ${format.toUpperCase()}` });
     trackDownload(res.download_id, item, btn, release);
+    setPanel('dlDrawer');
     return true;
   } catch {
     toast('下载启动失败'); release(); return false;
@@ -875,7 +1182,9 @@ function addDlItem(t) {
       <button class="dl-delete" type="button" aria-label="删除 ${esc(t.song_name)} 下载任务">${ICON_TRASH}</button>
     </div>
     <div class="dl-bar"><i></i></div>
-    <div class="dl-stat"><span class="prog">准备中…</span><span class="s"></span></div>`;
+    <div class="dl-stat"><span class="prog">准备中…</span><span class="s"></span></div>
+    <p class="dl-error" hidden></p>
+    <div class="dl-actions"><button class="dl-retry" type="button" hidden>重试</button><button class="dl-open" type="button" hidden>${desktopReady ? '显示文件' : '保存到设备'}</button></div>`;
   list.prepend(li);
   dlCount++; fab.classList.add('has'); fab.querySelector('.badge').textContent = dlCount;
   return li;
@@ -883,20 +1192,92 @@ function addDlItem(t) {
 
 function removeDlItem(item) {
   if (!item.isConnected) return;
+  if (item.dataset.downloadId) downloadTasks.delete(item.dataset.downloadId);
   item.remove();
-  dlCount = Math.max(0, dlCount - 1);
+  refreshTaskCounts();
+}
+
+function refreshTaskCounts() {
+  dlCount = [...downloadTasks.values()].filter(task => !['done', 'cancelled'].includes(task.status)).length;
   fab.querySelector('.badge').textContent = dlCount;
-  if (!dlCount) {
-    fab.classList.remove('has');
-    $('#dlList').innerHTML = '<li class="dl-empty">暂无下载任务</li>';
+  fab.classList.toggle('has', dlCount > 0);
+  $('#retryFailed').disabled = ![...downloadTasks.values()].some(task => task.status === 'error');
+  for (const [id, message] of [['#dlList', '暂无下载任务'], ['#recentList', '完成后可在这里找到文件']]) {
+    if (!$(id).querySelector('.dl-item')) $(id).innerHTML = `<li class="dl-empty">${message}</li>`;
   }
 }
 
-function trackDownload(id, item, btn, release = () => {}) {
-  const es = new EventSource(`/api/download/${id}/progress`);
+async function retryDownloadTask(id) {
+  const task = downloadTasks.get(id);
+  if (!task || task.status !== 'error') return false;
+  const button = task.item.querySelector('.dl-retry');
+  if (button.disabled) return false;
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/download/${id}/retry`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '重试失败');
+    const record = task.record;
+    removeDlItem(task.item);
+    if (!downloadTasks.has(data.download_id)) {
+      trackDownload(data.download_id, addDlItem({ song_name: record.song_name || record.name, singers: record.singers || '' }));
+    }
+    return true;
+  } catch (err) {
+    task.item.querySelector('.dl-error').textContent = err.message;
+    toast(err.message || '重试失败');
+    return false;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$('#retryFailed').onclick = async () => {
+  const ids = [...downloadTasks].filter(([, task]) => task.status === 'error').map(([id]) => id);
+  let started = 0;
+  for (const id of ids) if (await retryDownloadTask(id)) started++;
+  toast(`已重新添加 ${started} / ${ids.length} 项失败任务`);
+};
+
+async function restoreDownloads() {
+  const terminal = new Map([...downloadTasks].filter(([, task]) => ['done', 'error'].includes(task.status)));
+  try {
+    const response = await fetch('/api/downloads');
+    if (!response.ok) throw new Error();
+    const data = await response.json();
+    const present = new Set(data.tasks.map(record => record.download_id));
+    for (const [id, task] of terminal) {
+      if (!present.has(id) && downloadTasks.get(id) === task) removeDlItem(task.item);
+    }
+    for (const record of data.tasks.reverse()) {
+      const existing = downloadTasks.get(record.download_id);
+      if (existing) {
+        // Active tasks use SSE; terminal tasks must refresh file availability and other-tab changes.
+        if (terminal.get(record.download_id) === existing && (record.updated || 0) >= (existing.record.updated || 0)) {
+          existing.restore(record);
+        }
+        continue;
+      }
+      const item = addDlItem({ song_name: record.song_name || record.name, singers: record.singers || '' });
+      trackDownload(record.download_id, item, null, () => {}, record);
+    }
+  } catch {
+    toast('任务列表读取失败，重新打开下载面板可重试');
+  }
+}
+
+function trackDownload(id, item, btn, release = () => {}, initial = null) {
+  let restoring = Boolean(initial);
+  const es = initial && ['done', 'error', 'cancelled'].includes(initial.status)
+    ? { close() {} } : new EventSource(`/api/download/${id}/progress`);
+  item.dataset.downloadId = id;
+  const task = { item, status: initial?.status || 'queued', record: initial || {} };
+  downloadTasks.set(id, task);
+  item.querySelector('.dl-retry').onclick = () => retryDownloadTask(id);
   item.querySelector('.dl-delete').onclick = async (e) => {
-    if (!confirm('删除这个下载任务并清理临时文件？')) return;
-    e.currentTarget.disabled = true;
+    if (task.status !== 'done' && !confirm('移除这个任务？未完成的下载会取消并清理临时文件。')) return;
+    const button = e.currentTarget;
+    button.disabled = true;
     try {
       const response = await fetch(`/api/download/${id}`, { method: 'DELETE' });
       if (!response.ok) throw new Error();
@@ -910,19 +1291,25 @@ function trackDownload(id, item, btn, release = () => {}) {
       if (btn) btn.classList.remove('busy');
       toast('下载任务已删除');
     } catch {
-      e.currentTarget.disabled = false;
+      button.disabled = false;
       toast('删除失败');
     }
   };
-  es.addEventListener('progress', (ev) => {
-    const d = JSON.parse(ev.data);
+  const update = d => {
+    if (task.status !== d.status) scheduleDownloadMarkers();
+    task.status = d.status;
+    task.record = d;
+    refreshTaskCounts();
     item.classList.remove('error');
     const bar = item.querySelector('.dl-bar i');
     const prog = item.querySelector('.prog');
     const s = item.querySelector('.s');
     if (d.status === 'error') {
       item.classList.add('error'); prog.textContent = '失败';
-      s.textContent = (d.message || '').slice(0, 24);
+      s.textContent = '';
+      item.querySelector('.dl-error').hidden = false;
+      item.querySelector('.dl-error').textContent = d.message || '下载失败，请重试';
+      item.querySelector('.dl-retry').hidden = false;
       item.querySelector('.dl-delete').disabled = false;
       es.close(); release(); if (btn) btn.classList.remove('busy'); return;
     }
@@ -958,14 +1345,40 @@ function trackDownload(id, item, btn, release = () => {}) {
     prog.textContent = mb(done) + (total ? ' / ' + mb(total) : '');
     if (d.status === 'downloading' && d.speed) s.textContent = mb(d.speed) + '/s';
     if (d.status === 'done') {
-      removeDlItem(item);
+      prog.textContent = `已完成 · ${(d.format || '').toUpperCase()} · ${mb(d.downloaded || 0)}`;
+      s.textContent = '';
+      item.querySelector('.dl-bar').hidden = true;
+      item.querySelector('.dl-delete').setAttribute('aria-label', '移除此完成记录，保留音乐文件');
+      const open = item.querySelector('.dl-open');
+      open.hidden = !d.file_url;
+      open.textContent = desktopReady && d.relative ? '显示文件' : '保存到设备';
+      open.onclick = () => locateFile(d);
+      const list = $('#recentList');
+      list.querySelector('.dl-empty')?.remove();
+      list.prepend(item);
+      refreshTaskCounts();
       release();
-      loadLibrary();
+      if (!restoring) loadLibrary();
       es.close(); if (btn) btn.classList.remove('busy');
-      toast('下载完成：' + (d.name || ''));
+      if (!restoring) toast('下载完成：' + (d.name || ''));
     }
-  });
-  es.onerror = () => {
+  };
+  task.restore = record => {
+    restoring = true;
+    update(record);
+    restoring = false;
+  };
+  if (es.addEventListener) es.addEventListener('progress', ev => update(JSON.parse(ev.data)));
+  if (initial) update(initial);
+  restoring = false;
+  refreshTaskCounts();
+  scheduleDownloadMarkers();
+  es.onerror = ev => {
+    if (ev?.data) {
+      es.close(); release(); removeDlItem(item);
+      toast('任务已移除');
+      return;
+    }
     item.classList.add('error');
     item.querySelector('.prog').textContent = '进度连接中断，正在重连';
     item.querySelector('.s').textContent = '请勿重复下载';
@@ -997,3 +1410,4 @@ document.addEventListener('keydown', handleShortcuts);
 
 showNoLyrics();
 loadSources();
+restoreDownloads();

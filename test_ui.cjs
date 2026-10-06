@@ -10,7 +10,7 @@ function element() {
   const attributes = new Map();
   const classes = new Set();
   return {
-    attributes, hidden: false, inert: true, textContent: '', style: {}, listeners: {},
+    attributes, hidden: false, inert: true, textContent: '', style: {}, listeners: {}, dataset: {},
     classList: {
       add(name) { classes.add(name); },
       remove(name) { classes.delete(name); },
@@ -19,6 +19,7 @@ function element() {
     },
     setAttribute(name, value) { attributes.set(name, String(value)); },
     getAttribute(name) { return attributes.get(name); },
+    removeAttribute(name) { attributes.delete(name); },
     toggleAttribute(name, value) { if (value) attributes.set(name, ''); else attributes.delete(name); },
     contains() { return false; },
     focus() {},
@@ -192,7 +193,7 @@ test('searching again preserves tracks referenced by the current playback queue'
   };
   helper('runSearch', {
     $, tracks, queue: ['old-a', 'old-b'], activeQueue: ['old-a', 'old-b'], currentToken: 'old-a', searchES: null,
-    activeSources: () => ['MiguMusicClient'], setStatus() {},
+    activeSources: () => ['MiguMusicClient'], setStatus() {}, setView() {},
     EventSource: function() { this.addEventListener = () => {}; },
     selectedTokens: new Set(), sourceStates: new Map(),
     pruneTracks() {}, updateSelection() {}, setSourceState() {}, renderSourceStates() {}
@@ -261,6 +262,8 @@ test('batch download snapshots selection, handles failures, and releases protect
   const batch = new Set();
   const started = [];
   const context = vm.createContext({ queue: ['a', 'b'], selectedTokens: selected, batchTokens: batch, batchDownloading: false,
+    downloadPlanning: false, formatPreference: { value: 'ask' },
+    planDownloads: async tokens => ({ items: tokens.map(token => ({ token, status: 'ready' })), duplicate: false }),
     chooseDownloadFormat: async () => 'mp3',
     updateSelection() {}, pruneTracks() {}, toast() {}, document: { querySelectorAll: () => [] },
     startDownload: async token => { assert.equal(batch.size, 2); started.push(token); return token === 'a'; }
@@ -315,6 +318,7 @@ test('native MP3 remains enabled without conversion tools and cancel starts noth
   assert.equal(await result, 'mp3');
   let started = false;
   await helper('requestDownload', {
+    downloadPlanning: false, formatTokens: new Set(), formatPreference: { value: 'ask' }, $: () => ({ open: false }),
     downloadingTokens: new Set(), chooseDownloadFormat: async () => null,
     startDownload: async () => { started = true; }
   })('track');
@@ -340,6 +344,7 @@ test('batch cancel retains selection and does not enqueue downloads', async () =
   const batch = new Set();
   await helper('downloadSelected', {
     queue: ['a'], selectedTokens: selected, batchTokens: batch, batchDownloading: false,
+    downloadPlanning: false, formatPreference: { value: 'ask' },
     chooseDownloadFormat: async () => null, updateSelection() {}, pruneTracks() {},
     document: { querySelectorAll: () => [] },
     startDownload() { assert.fail('cancel must not download'); }
@@ -354,7 +359,7 @@ test('download request carries the selected format', async () => {
     tracks: new Map([['song', {}]]), downloadingTokens: new Set(), toast() {},
     fetch: async (_, options) => { payload = JSON.parse(options.body); return { json: async () => ({ error: 'test' }) }; }
   })('song', null, 'flac');
-  assert.deepEqual(payload, { token: 'song', format: 'flac' });
+  assert.deepEqual(payload, { token: 'song', format: 'flac', duplicate: false });
 });
 
 test('dialog keyboard input never triggers playback shortcuts', () => {
@@ -369,6 +374,7 @@ test('download tracking keeps its duplicate guard through connection loss', () =
   const nodes = new Map();
   const item = { ...element(), querySelector: id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); } };
   helper('trackDownload', { EventSource: function() { es = this; this.addEventListener = () => {}; },
+    downloadTasks: new Map(), refreshTaskCounts() {}, scheduleDownloadMarkers() {},
     fetch() {}, toast() {}, mb() {}, removeDlItem() {}, loadLibrary() {}
   })('job', item, null, () => releases++);
   es.onerror();
@@ -380,6 +386,7 @@ test('an old download release cannot unlock a newer retry of the same track', as
   const tokens = new Set();
   const releases = [];
   const start = helper('startDownload', { tracks: new Map([['a', {}]]), downloadingTokens: tokens,
+    downloadTasks: new Map(), setPanel() {},
     fetch: async () => ({ json: async () => ({ download_id: 'job' }) }), toast() {},
     addDlItem: () => ({}), trackDownload: (id, item, btn, release) => releases.push(release) });
   await start('a'); releases[0]();
@@ -393,13 +400,276 @@ test('a slow older library response cannot overwrite the latest library', async 
   const responses = [];
   const nodes = new Map();
   const load = helper('loadLibrary', { libraryRequestId: 0, libraryQueue: [], activeQueue: [], shuffleOrder: [], tracks: new Map(),
+    libraryLoading: false, libraryLoaded: false, libraryErrorMessage: '', renderLibrary() {}, pruneTracks() {}, scheduleDownloadMarkers() {},
     $: id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); }, renderQueue() {},
     fetch: () => new Promise(resolve => responses.push(resolve)) });
   const old = load();
   const recent = load();
-  responses[1]({ json: async () => ({ directory: 'new', tracks: [] }) });
+  responses[1]({ ok: true, json: async () => ({ directory: 'new', tracks: [] }) });
   await recent;
-  responses[0]({ json: async () => ({ directory: 'old', tracks: [] }) });
+  responses[0]({ ok: true, json: async () => ({ directory: 'old', tracks: [] }) });
   await old;
   assert.equal(nodes.get('#downloadDir').textContent, 'new');
+});
+
+test('default MP3 download bypasses format selection but still performs duplicate preflight', async () => {
+  const calls = [];
+  const protectedTokens = new Set();
+  await helper('requestDownload', {
+    downloadingTokens: new Set(), downloadPlanning: false, formatTokens: protectedTokens,
+    formatPreference: { value: 'mp3' }, $: () => ({ open: false }),
+    chooseDownloadFormat() { assert.fail('default format should not prompt'); },
+    planDownloads: async (tokens, format) => {
+      assert.equal(protectedTokens.has('song'), true);
+      calls.push(['plan', [...tokens], format]);
+      return { items: [{ token: 'song', status: 'ready' }], duplicate: false };
+    },
+    startDownload: async (...args) => calls.push(['start', ...args])
+  })('song', null);
+  assert.deepEqual(calls, [['plan', ['song'], 'mp3'], ['start', 'song', null, 'mp3', false]]);
+  assert.equal(protectedTokens.size, 0);
+});
+
+test('batch defaults skip existing and unavailable files while submitting ready tracks', async () => {
+  const selected = new Set(['saved', 'native', 'blocked']);
+  const started = [];
+  await helper('downloadSelected', {
+    queue: [...selected], selectedTokens: selected, batchTokens: new Set(), batchDownloading: false,
+    downloadPlanning: false, formatPreference: { value: 'mp3' }, updateSelection() {}, pruneTracks() {}, toast() {},
+    document: { querySelectorAll: () => [] },
+    planDownloads: async () => ({ duplicate: false, items: [
+      { token: 'saved', status: 'existing' }, { token: 'native', status: 'ready' },
+      { token: 'blocked', status: 'unavailable' }
+    ] }),
+    startDownload: async token => { started.push(token); return true; }
+  })();
+  assert.deepEqual(started, ['native']);
+  assert.deepEqual([...selected], ['saved', 'blocked']);
+});
+
+test('preflight failure never starts a download and releases its planning lock', async () => {
+  const context = vm.createContext({ downloadPlanning: false,
+    fetch: async () => ({ ok: false, json: async () => ({ error: 'cannot inspect files' }) }),
+    toast() {}, confirmDownloadPlan() { assert.fail('no invalid plan confirmation'); }
+  });
+  vm.runInContext(source.match(/async function planDownloads\([^]*?\n\}/)[0], context);
+  assert.equal(await vm.runInContext('planDownloads(["a"], "mp3")', context), null);
+  assert.equal(context.downloadPlanning, false);
+});
+
+test('a single existing file requires confirmation and cancel returns no plan', async () => {
+  let reviews = 0;
+  const plan = helper('planDownloads', { downloadPlanning: false, toast() {},
+    fetch: async () => ({ ok: true, json: async () => ({ items: [{ token: 'a', status: 'existing' }] }) }),
+    confirmDownloadPlan: async () => { reviews++; return null; }
+  });
+  assert.equal(await plan(['a'], 'mp3'), null);
+  assert.equal(reviews, 1);
+});
+
+test('restored completed tasks remain accessible without duplicate notifications or progress connections', () => {
+  const nodes = new Map();
+  const item = { ...element(), querySelector: id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); } };
+  const completed = [];
+  let release = 0;
+  const tasks = new Map();
+  helper('trackDownload', {
+    downloadTasks: tasks, desktopReady: false, refreshTaskCounts() {}, scheduleDownloadMarkers() {}, mb: value => String(value),
+    $: () => ({ querySelector: () => null, prepend: node => completed.push(node) }),
+    EventSource() { assert.fail('completed tasks do not need an SSE connection'); },
+    toast() { assert.fail('restoring should not repeat completion toasts'); },
+    loadLibrary() { assert.fail('restoring a completed item should not reload library per item'); }
+  })('done', item, null, () => release++, { status: 'done', format: 'mp3', downloaded: 100, file_url: '/api/file/done' });
+  assert.equal(tasks.get('done').status, 'done');
+  assert.deepEqual(completed, [item]);
+  assert.equal(nodes.get('.dl-open').hidden, false);
+  assert.equal(release, 1);
+});
+
+test('failure messages remain complete and expose retry', () => {
+  let listener;
+  const nodes = new Map();
+  const item = { ...element(), querySelector: id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); } };
+  const tasks = new Map();
+  helper('trackDownload', {
+    downloadTasks: tasks, refreshTaskCounts() {}, scheduleDownloadMarkers() {},
+    EventSource: function() { this.addEventListener = (_, fn) => { listener = fn; }; this.close = () => {}; }
+  })('failed', item);
+  const message = '无法转换音频：请安装 FFmpeg 和 FFprobe，并在下载面板点击重新检测后再试一次';
+  listener({ data: JSON.stringify({ status: 'error', message }) });
+  assert.equal(nodes.get('.dl-error').textContent, message);
+  assert.equal(nodes.get('.dl-retry').hidden, false);
+});
+
+test('older marker responses cannot replace the current search state', async () => {
+  const states = [];
+  let finish;
+  const refresh = helper('refreshDownloadMarkers', {
+    queue: ['new'], markerRequestId: 2, formatPreference: { value: 'mp3' },
+    fetch: () => new Promise(resolve => { finish = resolve; }),
+    document: { querySelectorAll() { states.push('touched'); return []; } }
+  });
+  const pending = refresh(1);
+  finish({ ok: true, json: async () => ({ items: [] }) });
+  await pending;
+  assert.deepEqual(states, []);
+});
+
+test('restoring reconciles removed terminal tasks and refreshes file availability', async () => {
+  const removed = [];
+  const updates = [];
+  const tasks = new Map([
+    ['old-error', { status: 'error', item: 'old', record: {} }],
+    ['done', { status: 'done', item: 'done', record: { updated: 1 }, restore: record => updates.push(record) }],
+    ['active', { status: 'downloading', item: 'active' }]
+  ]);
+  await helper('restoreDownloads', {
+    downloadTasks: tasks,
+    fetch: async () => ({ ok: true, json: async () => ({ tasks: [{ download_id: 'done', status: 'done', updated: 2 }] }) }),
+    removeDlItem: item => removed.push(item), toast() { assert.fail('snapshot should restore'); }
+  })();
+  assert.deepEqual(removed, ['old']);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].file_url, undefined);
+});
+
+test('repeat local export offers and submits explicit copy despite conflict error text', async () => {
+  const nodes = new Map();
+  const $ = id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
+  $('#downloadPlanList').replaceChildren = () => {};
+  $('#downloadPlanList').appendChild = () => {};
+  $('#downloadPlanDialog').showModal = () => {};
+  const conflict = { status: 'existing', format: 'mp3', can_download: true, error: 'already exists', code: 'already_downloaded' };
+  const confirmation = helper('confirmDownloadPlan', {
+    $, desktopReady: false, esc: value => value, downloadPlanLabel: () => 'existing',
+    document: { createElement: () => element() }
+  })([conflict], 'mp3');
+  assert.equal($('#downloadPlanCopy').hidden, false);
+  $('#downloadPlanDialog').returnValue = 'copy';
+  $('#downloadPlanDialog').listeners.close();
+  assert.equal(await confirmation, 'copy');
+  const bodies = [];
+  const button = {};
+  await helper('exportLocalMp3', {
+    downloadTasks: new Map(), confirmDownloadPlan: async () => 'copy',
+    fetch: async (url, options) => {
+      bodies.push(JSON.parse(options.body));
+      return { ok: bodies.length > 1, json: async () => bodies.length === 1 ? conflict : { download_id: 'copy' } };
+    }, addDlItem: () => ({}), trackDownload() {}, setPanel() {}, toast() { assert.fail('copy must succeed'); }
+  })({ relative: 'original.flac', song_name: 'Song' }, button);
+  assert.deepEqual(bodies.map(body => body.duplicate), [false, true]);
+  assert.equal(button.disabled, false);
+});
+
+test('library filtering combines format and normalized words across title, artist and album', () => {
+  const items = [
+    { token: 'a', song_name: '晴天（现场版）', singers: 'Alice', album: 'Live 2026', ext: 'flac', modified: 1 },
+    { token: 'b', song_name: '晴天', singers: 'Alice', album: 'Studio', ext: 'mp3', modified: 3 },
+    { token: 'c', song_name: '夜航', singers: 'Bob', album: 'Live 2026', ext: 'flac', modified: 2 }
+  ];
+  const select = helper('selectLibraryTracks', { originalFormat: helper('originalFormat') });
+  assert.deepEqual(Array.from(select(items, ' ＡＬＩＣＥ  live ', 'flac', 'recent'), t => t.token), ['a']);
+  assert.deepEqual(Array.from(select(items, '晴天', '', 'recent'), t => t.token), ['b', 'a']);
+  assert.equal(select(items, '不存在', '', 'recent').length, 0);
+  assert.equal(select(items, '', 'wav', 'recent').length, 0);
+  assert.deepEqual(items.map(t => t.token), ['a', 'b', 'c'], 'filtering must not mutate source order');
+});
+
+test('library sorts are deterministic and keep versions with the same title', () => {
+  const items = [
+    { token: 'a', song_name: 'Track 10', singers: 'Beta', relative: 'a', modified: 2 },
+    { token: 'b', song_name: 'Track 2', singers: 'Alpha', relative: 'b', modified: 1 },
+    { token: 'c', song_name: 'Track 2', singers: 'Alpha', relative: 'c', modified: 3 }
+  ];
+  const select = helper('selectLibraryTracks', { originalFormat: helper('originalFormat') });
+  for (const sort of ['title', 'artist']) assert.deepEqual(Array.from(select(items, '', '', sort), t => t.token), ['b', 'c', 'a']);
+  assert.deepEqual(Array.from(select(items, '', '', 'recent'), t => t.token), ['c', 'a', 'b']);
+});
+
+test('switching between search and library hides only the view and preserves playback state', () => {
+  const nodes = new Map();
+  const $ = id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
+  const body = element();
+  let closed = 0;
+  const setView = helper('setView', { $, document: { body }, setPanel: value => { assert.equal(value, null); closed++; } });
+  setView('library');
+  assert.equal($('#searchView').hidden, true);
+  assert.equal($('#libraryView').hidden, false);
+  assert.equal($('#libraryButton').getAttribute('aria-current'), 'page');
+  setView('search');
+  assert.equal($('#libraryView').hidden, true);
+  assert.equal($('#libraryButton').getAttribute('aria-current'), undefined);
+  assert.equal(closed, 2);
+});
+
+test('library refresh failures preserve the last known queue and expose recovery', async () => {
+  const context = vm.createContext({ libraryRequestId: 0, libraryLoaded: true, libraryLoading: false,
+    libraryErrorMessage: '', libraryQueue: ['saved'], tracks: new Map([['saved', {}]]),
+    $: () => element(), renderLibrary() {}, fetch: async () => ({ ok: false }) });
+  vm.runInContext(source.match(/async function loadLibrary\([^]*?\n\}/)[0], context);
+  await vm.runInContext('loadLibrary()', context);
+  assert.match(context.libraryErrorMessage, /上次读取/);
+  assert.equal(context.libraryLoading, false);
+  assert.deepEqual(context.libraryQueue, ['saved']);
+});
+
+test('refresh removes missing local tracks even when they are filtered out', async () => {
+  const context = vm.createContext({ libraryRequestId: 0, libraryLoaded: true, libraryLoading: false,
+    libraryErrorMessage: '', libraryQueue: ['missing', 'kept'], currentToken: 'remote',
+    activeQueue: ['remote', 'missing', 'kept'], shuffleOrder: ['missing', 'kept', 'remote'],
+    tracks: new Map([['remote', {}], ['missing', {}], ['kept', {}]]),
+    $: () => element(), renderLibrary() {}, renderQueue() {}, pruneTracks() {}, scheduleDownloadMarkers() {},
+    fetch: async () => ({ ok: true, json: async () => ({ directory: '/music', tracks: [{ token: 'kept' }] }) }) });
+  vm.runInContext(source.match(/async function loadLibrary\([^]*?\n\}/)[0], context);
+  await vm.runInContext('loadLibrary()', context);
+  assert.equal(context.tracks.has('missing'), false);
+  assert.deepEqual(Array.from(context.activeQueue), ['remote', 'kept']);
+  assert.deepEqual(Array.from(context.libraryQueue), ['kept']);
+});
+
+test('changing download directory invalidates old file actions even if the next read fails', async () => {
+  const nodes = new Map();
+  const context = vm.createContext({ libraryRequestId: 4, libraryLoaded: true, libraryLoading: false,
+    libraryErrorMessage: '', libraryQueue: ['local-a'], currentToken: 'remote',
+    activeQueue: ['remote', 'local-a'], shuffleOrder: ['local-a', 'remote'],
+    tracks: new Map([['remote', {}], ['local-a', { local: true }]]),
+    $: id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
+    renderLibrary() {}, renderQueue() {}, fetch: async () => ({ ok: false }) });
+  for (const name of ['invalidateLibrary', 'loadLibrary']) {
+    vm.runInContext(source.match(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`))[0], context);
+  }
+  vm.runInContext('invalidateLibrary()', context);
+  assert.equal(context.libraryRequestId, 5);
+  await vm.runInContext('loadLibrary()', context);
+  assert.equal(context.libraryLoaded, false);
+  assert.equal(context.tracks.has('local-a'), false);
+  assert.equal(context.libraryQueue.length, 0);
+  assert.deepEqual(Array.from(context.activeQueue), ['remote']);
+  assert.doesNotMatch(context.libraryErrorMessage, /上次读取/);
+});
+
+test('playing a filtered library uses a snapshot without including hidden tracks', () => {
+  const nodes = new Map();
+  const $ = id => { if (!nodes.has(id)) nodes.set(id, { ...element(), value: '' }); return nodes.get(id); };
+  const rows = [];
+  $('#libraryList').replaceChildren = () => {};
+  $('#libraryList').appendChild = row => rows.push(row);
+  const calls = [];
+  helper('renderLibrary', { $, libraryQueue: ['hidden', 'shown'], libraryLoading: false, libraryLoaded: true,
+    libraryErrorMessage: '', currentToken: null, desktopReady: false,
+    visibleLibraryTracks: () => [{ token: 'shown', song_name: '现场版', singers: '', ext: 'mp3', stream_url: '/local/shown' }],
+    document: { createElement: () => {
+      const buttons = new Map();
+      return { ...element(), querySelector: selector => {
+        if (!buttons.has(selector)) buttons.set(selector, element()); return buttons.get(selector);
+      } };
+    } },
+    esc: value => value || '', mb: () => '1MB', ICON_PLAY: '', ICON_FOLDER: '', ICON_TRASH: '',
+    play: (token, tokens) => calls.push([token, Array.from(tokens)])
+  })();
+  assert.equal(calls.length, 0, 'rendering a filter must not change playback');
+  rows[0].querySelector('.library-play').onclick();
+  assert.deepEqual(calls, [['shown', ['shown']]]);
+  rows[0].ondblclick({ target: { closest: selector => selector.includes('a') } });
+  assert.equal(calls.length, 1, 'saving a file must not start playback');
 });
