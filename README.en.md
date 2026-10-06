@@ -61,14 +61,16 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run 
 
 ## Usage
 
-- Type a keyword in the top bar to search; results stream in one by one.
+- Type a keyword in the top bar to search; results stream in one by one. The last 10 searches are stored locally for reuse, individual removal, or clearing. Music-source selections also persist.
 - Toggle music sources in the sidebar (a horizontal list at the top on phones; only Migu is on by default). The light interface uses layered neutral surfaces, a berry-red accent, and system fonts with no online font dependency.
 - Desktop results retain a compact first-track summary and play action; phones prioritize the list. Titles wrap to retain original live/instrumental version descriptions, providers use readable names, and placeholder values such as NULL are hidden. Result order is not a popularity or recommendation ranking.
 - Per-source status shows searching, result counts, timeouts, and request failures without hiding results from other sources.
 - Select tracks or all current results, then use "下载所选" to add them to the existing concurrent download queue. Results arriving later are not automatically selected.
 - "播放全部" creates an independent playback queue from the current results. New searches do not clear it; each row also offers a play-next action that inserts or moves the track.
 - The player supports shuffle, sequential play, repeat-all, and repeat-one. Repeat-one applies at the natural end of a song; manual next/previous still changes tracks.
-- The bottom-right queue button lets you inspect, play, remove, or clear queued tracks while retaining the current song. Playback queues and modes are session-only and reset on page reload.
+- The bottom-right queue button lets you inspect, play, remove, or clear upcoming tracks while retaining the current song; "清空全部并停止" clears everything and stops playback. The first 200 tracks, current selection, shuffle order, and repeat mode persist. Reopening restores a paused queue, without restoring playback position.
+- Restored remote tracks fetch fresh links when played, matching the exact provider and track/quality identity. If that version cannot be confirmed, retry or search again; a same-title recording is never substituted automatically. Broken streams get at most one automatic refresh. Local tracks are checked against their directory, relative path, size, and modification time; changed or missing files must be selected again.
+- Only track metadata and preferences are stored, without playback URLs, temporary tokens, or lyrics. Browser records belong to the same origin, including its port; clearing site data removes them, and the last interaction wins across tabs. Desktop uses a dedicated persistent browser directory and local port `42001`, allowing one instance; an occupied port aborts startup instead of opening another service. Old private sessions cannot be migrated. Unavailable storage does not prevent current-session use.
 - Each row offers play, play-next, and download buttons. Double-clicking a song row also plays it.
 - Set the download format above the results: MP3 by default, original FLAC, or "每次选择" (ask each time). The preference persists in this browser. When asking each time, FLAC is offered only if every selected track is originally FLAC; cancelling creates no tasks.
 - Preflight checks local files and active tasks. An existing file with the same provider, track identity, quality, and target format offers view, save another copy, or cancel; active tasks are not queued twice. Batch downloads use one confirmation, skip existing tracks by default, and list conversion requirements and unavailable items.
@@ -97,7 +99,7 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run 
 
 [Mobile local library screenshot](docs/library-mobile.png)
 
-You can keep listening to the current queue while searching for other music. Favorites, cross-session queue restoration, and playlist-link import are not yet available.
+You can keep listening to the current queue while searching for other music. Favorites and playlist-link import are not yet available.
 
 ## UI verification
 
@@ -115,6 +117,7 @@ app.py             Flask backend: streaming search (SSE) / audio proxy (Range) /
 static/index.html  UI markup
 static/style.css   Visual styling (Apple Music-inspired light workspace)
 static/app.js      Frontend logic: streaming search / queue / Web Audio / lyrics / batch downloads
+static/session.js  History and queue validation / persistence / exact-identity resolution
 docs/             Pages showcase and screenshots; no hosted search or download service
 ```
 

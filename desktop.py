@@ -2,9 +2,11 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import webview
+from werkzeug.serving import make_server
 
 
 DEFAULT_DOWNLOAD_DIR = Path.home() / 'Downloads' / 'Soundtrack'
@@ -109,14 +111,21 @@ def main():
     )
     import app as app_module
 
+    # A stable origin keeps browser preferences across launches. Bind before
+    # opening the window: an occupied port must not open another local app.
+    server = make_server('127.0.0.1', 42001, app_module.app, threaded=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     webview.create_window(
         '声轨 · Soundtrack',
-        app_module.app,
+        'http://127.0.0.1:42001',
         js_api=DesktopApi(app_module),
         width=1280,
         height=800,
     )
-    webview.start()
+    try:
+        webview.start(private_mode=False, storage_path=str(SETTINGS_DIR / 'webview'))
+    finally:
+        server.shutdown()
 
 
 if __name__ == '__main__':

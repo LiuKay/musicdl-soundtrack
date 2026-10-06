@@ -193,7 +193,7 @@ test('searching again preserves tracks referenced by the current playback queue'
   };
   helper('runSearch', {
     $, tracks, queue: ['old-a', 'old-b'], activeQueue: ['old-a', 'old-b'], currentToken: 'old-a', searchES: null,
-    activeSources: () => ['MiguMusicClient'], setStatus() {}, setView() {},
+    activeSources: () => ['MiguMusicClient'], setStatus() {}, setView() {}, rememberSearch() {},
     EventSource: function() { this.addEventListener = () => {}; },
     selectedTokens: new Set(), sourceStates: new Map(),
     pruneTracks() {}, updateSelection() {}, setSourceState() {}, renderSourceStates() {}
@@ -401,7 +401,7 @@ test('a slow older library response cannot overwrite the latest library', async 
   const nodes = new Map();
   const load = helper('loadLibrary', { libraryRequestId: 0, libraryQueue: [], activeQueue: [], shuffleOrder: [], tracks: new Map(),
     libraryLoading: false, libraryLoaded: false, libraryErrorMessage: '', renderLibrary() {}, pruneTracks() {}, scheduleDownloadMarkers() {},
-    $: id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); }, renderQueue() {},
+    $: id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); }, renderQueue() {}, reconcileLocalQueue() {},
     fetch: () => new Promise(resolve => responses.push(resolve)) });
   const old = load();
   const recent = load();
@@ -618,7 +618,7 @@ test('refresh removes missing local tracks even when they are filtered out', asy
     libraryErrorMessage: '', libraryQueue: ['missing', 'kept'], currentToken: 'remote',
     activeQueue: ['remote', 'missing', 'kept'], shuffleOrder: ['missing', 'kept', 'remote'],
     tracks: new Map([['remote', {}], ['missing', {}], ['kept', {}]]),
-    $: () => element(), renderLibrary() {}, renderQueue() {}, pruneTracks() {}, scheduleDownloadMarkers() {},
+    $: () => element(), renderLibrary() {}, renderQueue() {}, reconcileLocalQueue() {}, pruneTracks() {}, scheduleDownloadMarkers() {},
     fetch: async () => ({ ok: true, json: async () => ({ directory: '/music', tracks: [{ token: 'kept' }] }) }) });
   vm.runInContext(source.match(/async function loadLibrary\([^]*?\n\}/)[0], context);
   await vm.runInContext('loadLibrary()', context);

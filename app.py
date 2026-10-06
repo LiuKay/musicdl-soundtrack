@@ -277,8 +277,11 @@ def _track_payload(song_info, token):
     def s(v):
         return _display_text(v)
     ext = s(song_info.ext).lower().lstrip('.')
+    entry = REGISTRY.get(token) or {'song_info': song_info, 'source': s(song_info.source)}
     return {
         'token': token,
+        'source_id': entry['source'],
+        'identity': _download_identity(entry),
         'source': SUPPORTED_SOURCES.get(s(song_info.source), {}).get('short', s(song_info.source)),
         'source_label': _source_label(song_info.source),
         'song_name': s(song_info.song_name) or '未知曲目',
@@ -1066,6 +1069,9 @@ def _library_tracks():
                 'file_size_bytes': stat.st_size,
                 'modified': stat.st_mtime,
                 'relative': relative,
+                'restore_key': hashlib.sha256(json.dumps([
+                    str(Path(root).resolve()), relative, stat.st_size, stat.st_mtime_ns,
+                ]).encode()).hexdigest(),
                 'has_cover': bool(_existing_download_cover(path, metadata)),
                 'local': True,
                 'identity': metadata.get('identity', ''),

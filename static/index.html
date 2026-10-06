@@ -50,6 +50,7 @@
   <section id="searchView" aria-labelledby="pageTitle">
   <div class="page-heading"><div><p class="eyebrow">YOUR MUSIC, YOUR MOMENT</p><h1 id="pageTitle">搜索音乐</h1></div><span class="sourcebar-hint" id="searchStatus" role="status" aria-live="polite"></span></div>
   <div class="source-status-list" id="sourceStatusList" aria-label="音乐来源搜索状态" aria-live="polite" hidden></div>
+  <details id="searchHistory" class="search-history" hidden><summary>最近搜索</summary><div id="historyList"></div><button type="button" id="clearHistory" class="text-button">清空搜索历史</button></details>
   <section class="spotlight" id="spotlight" hidden aria-label="首个搜索结果">
     <div class="spotlight-cover" id="spotlightCover"></div>
     <div class="spotlight-copy"><p class="eyebrow">从这首开始</p><h2 id="spotlightTitle"></h2><p id="spotlightArtist"></p></div><button class="primary-button" id="spotlightPlay" type="button">播放歌曲</button>
@@ -156,6 +157,7 @@
 <aside class="queue-panel" id="queuePanel" aria-label="播放队列" inert>
   <div class="lyrics-head"><span>播放队列 <small id="queueCount">0</small></span><button id="queueClose" aria-label="关闭播放队列">✕</button></div>
   <div class="queue-heading"><span>搜索不会打断此列表</span><button id="clearQueue" type="button">清空待播</button></div>
+  <div class="queue-heading"><span id="queueSaveStatus" role="status">自动保留前 200 首，恢复后暂停</span><button id="clearAllQueue" type="button">清空全部并停止</button></div>
   <ol id="queueList" class="queue-list"></ol>
 </aside>
 
@@ -226,6 +228,7 @@
 </dialog>
 <audio id="audio" crossorigin="anonymous"></audio>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/static/session.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

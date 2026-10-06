@@ -327,3 +327,13 @@ body:not(.audio-playing) .eq i { animation-play-state: paused; }
   #libraryView .library-item, #libraryView .library-item.desktop { gap: 4px; padding: 10px 0; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+/* Recent searches stay compact until requested. */
+.search-history { margin: 0 0 16px; font-size: 12px; color: var(--muted); }
+.search-history summary { cursor: pointer; padding: 10px 0; }
+#historyList { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.history-item { display: inline-flex; max-width: 100%; background: #e9e9ec; border-radius: 8px; overflow: hidden; }
+.history-item button { min-height: 40px; padding: 8px 12px; color: #454550; }
+.history-search { overflow-wrap: anywhere; text-align: left; min-width: 0; }
+.history-remove { min-width: 40px; flex-shrink: 0; }
+.queue-research { flex-shrink: 0; color: #c92c48; min-height: 40px; font-size: 11px; }
+.queue-item small { white-space: normal; overflow-wrap: anywhere; }

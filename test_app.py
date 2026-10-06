@@ -12,6 +12,52 @@ import desktop
 
 
 class SearchCompatibilityTest(unittest.TestCase):
+    def test_playback_identity_survives_tokens_and_distinguishes_versions(self):
+        song = SimpleNamespace(source='MiguMusicClient', identifier='song-1', ext='mp3',
+                               song_name='Song', singers='Artist', album='', file_size='100',
+                               duration='3:00', cover_url='', lyric='')
+        first = app._track_payload(song, 'old')
+        second = app._track_payload(song, 'new')
+        self.assertEqual(first['identity'], second['identity'])
+        self.assertEqual(first['source_id'], 'MiguMusicClient')
+        song.identifier = 'live-version'
+        self.assertNotEqual(first['identity'], app._track_payload(song, 'new')['identity'])
+        song.identifier = None
+        self.assertEqual(app._track_payload(song, 'new')['identity'], '')
+
+    def test_local_restore_key_changes_with_directory_or_file(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            keys = []
+            for directory in [first, second]:
+                Path(directory, 'Song.mp3').write_bytes(b'audio')
+                with mock.patch.object(app, 'DOWNLOAD_DIR', directory):
+                    keys.append(app._library_tracks()[0]['restore_key'])
+                    self.assertEqual(keys[-1], app._library_tracks()[0]['restore_key'])
+                    Path(directory, 'Song.mp3').write_bytes(b'changed')
+                    self.assertNotEqual(keys[-1], app._library_tracks()[0]['restore_key'])
+            self.assertNotEqual(*keys)
+
+    def test_desktop_uses_persistent_origin_and_shuts_down_server(self):
+        with mock.patch.object(desktop, 'make_server') as make_server, \
+                mock.patch.object(desktop.threading, 'Thread'), \
+                mock.patch.object(desktop.webview, 'create_window') as create_window, \
+                mock.patch.object(desktop.webview, 'start') as start, \
+                mock.patch.dict(os.environ, {}, clear=False):
+            desktop.main()
+            make_server.assert_called_once_with('127.0.0.1', 42001, app.app, threaded=True)
+            self.assertEqual(create_window.call_args.args[1], 'http://127.0.0.1:42001')
+            self.assertFalse(start.call_args.kwargs['private_mode'])
+            self.assertEqual(start.call_args.kwargs['storage_path'], str(desktop.SETTINGS_DIR / 'webview'))
+            make_server.return_value.shutdown.assert_called_once()
+
+    def test_desktop_port_conflict_never_opens_another_local_service(self):
+        with mock.patch.object(desktop, 'make_server', side_effect=SystemExit(1)), \
+                mock.patch.object(desktop.webview, 'create_window') as create_window, \
+                mock.patch.dict(os.environ, {}, clear=False):
+            with self.assertRaises(SystemExit):
+                desktop.main()
+            create_window.assert_not_called()
+
     def test_payload_cleans_exact_placeholders_without_changing_versions(self):
         song = SimpleNamespace(source='MiguMusicClient', ext='.FLAC', song_name='晴天（Live 2026）',
                                singers='Alice', album=' NULL ', file_size='N/A', duration='None',

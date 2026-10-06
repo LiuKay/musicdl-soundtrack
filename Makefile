@@ -9,4 +9,4 @@ app:
 
 test:
 	$(PYTHON) -m unittest -v test_app.py test_audio_formats.py test_download_workflow.py
-	node --test test_ui.cjs
+	node --test test_ui.cjs test_session.cjs
