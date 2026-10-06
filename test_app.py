@@ -2,6 +2,8 @@ import unittest
 import json
 import os
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -351,9 +353,12 @@ class SearchCompatibilityTest(unittest.TestCase):
                     f'/api/stream/{token}?cache=1&cache_max_mb=128',
                     headers={'Range': 'bytes=3-6'},
                 )
+                # Clearing after the cached response opens must not truncate it.
+                app.app.test_client().delete('/api/cache')
                 body = response.data
                 response.close()
-                old = Path(cache_dir) / 'old.mp3'
+                Path(cached).write_bytes(b'0123456789')
+                old = Path(cache_dir) / ('a' * 64 + '.mp3')
                 old.write_bytes(b'old')
                 os.utime(old, (1, 1))
                 app._prune_cache(10, keep=cached)
@@ -364,6 +369,119 @@ class SearchCompatibilityTest(unittest.TestCase):
         self.assertEqual(response.status_code, 206)
         self.assertEqual(body, b'3456')
         get.assert_not_called()
+
+    def test_cache_management_preserves_downloads_unrelated_files_and_symlinks(self):
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(app, 'CACHE_DIR', str(Path(root) / 'cache')), \
+                mock.patch.object(app, 'DOWNLOAD_DIR', str(Path(root) / 'downloads')):
+            cache = Path(app.CACHE_DIR)
+            cache.mkdir()
+            downloads = Path(app.DOWNLOAD_DIR)
+            downloads.mkdir()
+            saved = downloads / 'saved.mp3'
+            saved.write_bytes(b'permanent')
+            unrelated = cache / 'personal.mp3'
+            unrelated.write_bytes(b'personal')
+            workspace = cache / 'musicdl'
+            workspace.mkdir()
+            (workspace / ('a' * 64 + '.mp3')).write_bytes(b'provider data')
+            link = cache / ('b' * 64 + '.mp3')
+            link.symlink_to(saved)
+            (cache / ('c' * 64 + '.mp3')).write_bytes(b'audio')
+            (cache / ('d' * 64 + '.mp3.part')).write_bytes(b'partial')
+            client = app.app.test_client()
+            usage = client.get('/api/cache').get_json()
+            self.assertEqual((usage['bytes'], usage['files'], usage['partial_bytes']), (12, 1, 7))
+            result = client.delete('/api/cache').get_json()
+            self.assertEqual((result['removed'], result['freed_bytes'], result['bytes']), (2, 12, 0))
+            self.assertEqual(saved.read_bytes(), b'permanent')
+            self.assertEqual(unrelated.read_bytes(), b'personal')
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(len(list(workspace.iterdir())), 1)
+            self.assertEqual(client.delete('/api/cache').get_json()['removed'], 0)
+
+    def test_cache_cleanup_and_pruning_skip_active_writers(self):
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(app, 'CACHE_DIR', root), \
+                mock.patch.object(app, 'CACHE_JOBS', {'a' * 64}):
+            complete = Path(root) / ('a' * 64 + '.mp3')
+            partial = Path(str(complete) + '.part')
+            complete.write_bytes(b'complete')
+            partial.write_bytes(b'partial')
+            unrelated = Path(root) / 'personal.mp3'
+            unrelated.write_bytes(b'personal')
+            app._prune_cache(0)
+            result = app.app.test_client().delete('/api/cache').get_json()
+            self.assertEqual((result['removed'], result['active_jobs'], result['bytes']), (0, 1, 15))
+            self.assertTrue(complete.exists())
+            self.assertTrue(partial.exists())
+            app.CACHE_JOBS.clear()
+            app._prune_cache(0)
+            self.assertFalse(complete.exists())
+            self.assertTrue(unrelated.exists())
+            result = app.app.test_client().delete('/api/cache').get_json()
+            self.assertEqual(result['bytes'], 0)
+
+    def test_cache_rejects_overlapping_roots_including_aliases(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            alias = base / 'alias'
+            downloads = base / 'downloads'
+            downloads.mkdir()
+            alias.symlink_to(downloads, target_is_directory=True)
+            for cache, target in [(downloads, downloads), (base, downloads),
+                                  (downloads / 'cache', downloads), (alias, downloads)]:
+                with self.subTest(cache=cache, target=target), \
+                        mock.patch.object(app, 'CACHE_DIR', str(cache)), \
+                        mock.patch.object(app, 'DOWNLOAD_DIR', str(target)):
+                    for method in ['get', 'delete']:
+                        response = getattr(app.app.test_client(), method)('/api/cache')
+                        self.assertEqual(response.status_code, 503)
+                    with self.assertRaises(OSError):
+                        app._prune_cache(0)
+
+    def test_cache_missing_directory_is_empty_and_does_not_create_it(self):
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(app, 'CACHE_DIR', str(Path(root) / 'missing')):
+            for method in ['get', 'delete']:
+                response = getattr(app.app.test_client(), method)('/api/cache')
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.get_json()['bytes'], 0)
+            self.assertFalse(Path(app.CACHE_DIR).exists())
+
+    def test_cache_clear_reports_files_it_cannot_remove(self):
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(app, 'CACHE_DIR', root):
+            path = Path(root) / ('a' * 64 + '.mp3')
+            path.write_bytes(b'locked')
+            with mock.patch.object(app.os, 'remove', side_effect=PermissionError):
+                result = app.app.test_client().delete('/api/cache').get_json()
+            self.assertEqual((result['removed'], result['failed'], result['bytes']), (0, 1, 6))
+
+    def test_concurrent_cache_writers_enforce_limit_after_both_publish(self):
+        entries = [{'song_info': SimpleNamespace(download_url='https://example.test/song.mp3',
+                    song_name=name, ext='mp3'), 'source': 'MiguMusicClient', 'headers': {}, 'cookies': {}}
+                   for name in ['first', 'second']]
+        before, after = threading.Barrier(2), threading.Barrier(2)
+        prune = app._prune_cache
+
+        def synchronized_prune(*args, **kwargs):
+            before.wait(timeout=5)
+            prune(*args, **kwargs)
+            after.wait(timeout=5)
+
+        upstream = mock.MagicMock()
+        upstream.__enter__.return_value = upstream
+        upstream.headers = {'Content-Length': '6'}
+        upstream.iter_content.return_value = [b'abcdef']
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(app, 'CACHE_DIR', root), \
+                mock.patch.object(app, 'CACHE_JOBS', {app._cache_key(entry) for entry in entries}), \
+                mock.patch.object(app.requests, 'get', return_value=upstream), \
+                mock.patch.object(app, '_prune_cache', side_effect=synchronized_prune):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(app._cache_audio, entry, app._cache_path(entry), 10) for entry in entries]
+                for future in futures:
+                    future.result(timeout=10)
+            self.assertEqual(sum(path.stat().st_size for path in Path(root).iterdir()), 6)
+            self.assertFalse(app.CACHE_JOBS)
 
     def test_cache_audio_writes_complete_file(self):
         entry = {

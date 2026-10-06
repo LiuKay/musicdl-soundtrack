@@ -34,6 +34,73 @@ function helper(name, context = {}) {
   return vm.runInNewContext(`(${match[0]})`, { pendingDownloadRequests: 0, updateLeaveWarning() {}, ...context });
 }
 
+function cacheContext(fetch, confirm = () => true) {
+  const nodes = Object.fromEntries(['clearCache', 'refreshCache', 'cacheUsage', 'cacheStatus'].map(id => ['#' + id, element()]));
+  const messages = [];
+  const context = vm.createContext({ $: id => nodes[id], cacheLoading: false, fetch, confirmCacheCleanup: confirm,
+    cacheSize: helper('cacheSize'), toast: value => messages.push(value) });
+  vm.runInContext(source.match(/async function loadCache\([^]*?\n\}/)[0], context);
+  return { context, nodes, messages };
+}
+
+test('cache cleanup cancellation sends no request or state change', async () => {
+  const { context, nodes } = cacheContext(() => assert.fail('no request after cancel'), () => false);
+  await context.loadCache(true);
+  assert.equal(context.cacheLoading, false);
+  assert.equal(nodes['#cacheUsage'].textContent, '');
+});
+
+test('cache confirmation resets previous consent and only accepts an explicit clear', async () => {
+  const dialog = element();
+  dialog.showModal = () => { dialog.open = true; };
+  const confirmCleanup = helper('confirmCacheCleanup', { $: () => dialog });
+  for (const choice of ['', 'cancel', 'clear']) {
+    dialog.open = false;
+    dialog.returnValue = 'clear';
+    const result = confirmCleanup();
+    assert.equal(dialog.returnValue, '');
+    assert.equal(await confirmCleanup(), false);
+    dialog.returnValue = choice;
+    dialog.open = false;
+    dialog.listeners.close();
+    assert.equal(await result, choice === 'clear');
+  }
+});
+
+test('cache loading blocks duplicate actions and reports retained files after cleanup', async () => {
+  let resolve;
+  let calls = 0;
+  const { context, nodes, messages } = cacheContext((url, options) => {
+    calls++; assert.equal(url, '/api/cache'); assert.equal(options.method, 'DELETE');
+    return new Promise(done => { resolve = done; });
+  });
+  const pending = context.loadCache(true);
+  await context.loadCache(); await context.loadCache(true);
+  assert.equal(calls, 1);
+  assert.equal(nodes['#clearCache'].disabled, true);
+  resolve({ ok: true, json: async () => ({ bytes: 2048, files: 1, partial_bytes: 1024, active_jobs: 1,
+    removable_files: 1, removed: 2, freed_bytes: 4096, failed: 1 }) });
+  await pending;
+  assert.equal(nodes['#cacheUsage'].textContent, '2.0 KB');
+  assert.match(messages[0], /释放 4.0 KB/);
+  assert.match(messages[0], /1 个文件未能清理/);
+  assert.match(messages[0], /正在缓存的歌曲已保留/);
+  assert.equal(nodes['#clearCache'].disabled, false);
+  assert.equal(context.cacheLoading, false);
+});
+
+test('cache errors disable deletion but allow refreshing again', async () => {
+  const { context, nodes } = cacheContext(async () => ({ ok: false, json: async () => ({ error: '目录无法访问' }) }));
+  await context.loadCache();
+  assert.equal(nodes['#cacheStatus'].textContent, '目录无法访问');
+  assert.equal(nodes['#clearCache'].disabled, true);
+  assert.equal(nodes['#refreshCache'].disabled, false);
+  context.fetch = async () => ({ ok: true, json: async () => ({ bytes: 0, files: 0, partial_bytes: 0, active_jobs: 0, removable_files: 0 }) });
+  await context.loadCache();
+  assert.equal(nodes['#cacheUsage'].textContent, '0 B');
+  assert.equal(nodes['#clearCache'].disabled, true);
+});
+
 function leaveWarningContext() {
   const notice = element();
   const listeners = new Map();
@@ -161,9 +228,9 @@ test('play and pause SVGs use hidden attributes, never display both', () => {
 });
 
 test('drawers are mutually exclusive and closed drawers are inert', () => {
-  const nodes = Object.fromEntries(['lyricsPanel', 'lyricsToggle', 'lyricsClose', 'dlDrawer', 'downloadsButton', 'dlClose', 'queuePanel', 'queueToggle', 'queueClose'].map(id => ['#' + id, element()]));
+  const nodes = Object.fromEntries(['lyricsPanel', 'lyricsToggle', 'lyricsClose', 'dlDrawer', 'downloadsButton', 'dlClose', 'queuePanel', 'queueToggle', 'queueClose', 'cachePanel', 'cacheManage', 'cacheClose'].map(id => ['#' + id, element()]));
   const setPanel = helper('setPanel', { $: id => nodes[id], document: { activeElement: null } });
-  for (const id of ['lyricsPanel', 'dlDrawer', 'queuePanel']) {
+  for (const id of ['lyricsPanel', 'dlDrawer', 'queuePanel', 'cachePanel']) {
     setPanel(id);
     assert.equal(nodes['#' + id].inert, false);
     assert.equal(nodes['#' + id].classList.contains('open'), true);
@@ -177,7 +244,7 @@ test('drawers are mutually exclusive and closed drawers are inert', () => {
 });
 
 test('drawer close restores focus to its trigger', () => {
-  const nodes = Object.fromEntries(['lyricsPanel', 'lyricsToggle', 'lyricsClose', 'dlDrawer', 'downloadsButton', 'dlClose', 'queuePanel', 'queueToggle', 'queueClose'].map(id => ['#' + id, element()]));
+  const nodes = Object.fromEntries(['lyricsPanel', 'lyricsToggle', 'lyricsClose', 'dlDrawer', 'downloadsButton', 'dlClose', 'queuePanel', 'queueToggle', 'queueClose', 'cachePanel', 'cacheManage', 'cacheClose'].map(id => ['#' + id, element()]));
   let focused;
   nodes['#lyricsPanel'].contains = () => true;
   nodes['#lyricsToggle'].focus = () => { focused = 'lyricsToggle'; };

@@ -43,7 +43,7 @@ make app
 open dist/Soundtrack.app
 ```
 
-The build command installs the desktop-only packaging tools into `.venv`. The app saves music under `~/Downloads/Soundtrack/` by default, and the download drawer can select another folder; “Cache while playing” files are stored under `~/Library/Caches/Soundtrack/audio/`.
+The build command installs the desktop-only packaging tools into `.venv`. The app saves music under `~/Downloads/Soundtrack/` by default, and the download drawer can select another folder; “Cache played songs” stores temporary files under `~/Library/Caches/Soundtrack/audio/`.
 
 ## Build the Windows app
 
@@ -79,7 +79,9 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`. You can also run 
 - New downloads retain identity in `.soundtrack.json`, allowing recognition after a new search or app restart. Legacy files and results without reliable identifiers only get same-name hints, never an automatic skip based on title alone. Moved or missing files can be downloaded again.
 - Original MP3/FLAC audio is downloaded directly in its matching format. Other audio can be converted to 320 kbps MP3, never to FLAC; conversion does not improve source quality. Cached audio follows the same checks. Tasks show inspection, conversion waiting/progress, and metadata saving. Only one conversion runs at a time; cancellation cleans temporary files. Repeated downloads preserve existing audio under distinct filenames.
 - Bottom player bar: previous / play-pause / next, seek, volume, live spectrum.
-- “Cache while playing” keeps listened tracks locally and removes the oldest cache files when the selected 512 MB–5 GB limit is exceeded.
+- “Cache played songs” attempts to cache each full song in the background when playback starts. Cached playback and completed writes evict the least recently used files to meet the selected 512 MB–5 GB limit. Limit changes apply on the next cached playback; active writes may temporarily exceed it. Switching caching off does not cancel writes already started.
+- “Manage playback cache” shows usage, completed files, and active writes, with refresh and confirmed cleanup. Cleanup only removes app-generated files at the cache root, preserving active writes, symbolic links, provider workspaces, and downloaded music. Files that cannot be removed are reported for retry. Cache management and automatic eviction are disabled if the cache and download directories contain one another; use separate directories.
+- Cached songs do not appear in Local music and are not guaranteed to work offline. Use Download for permanent copies; playback after cleanup may need to load audio again.
 - The download drawer can run 1–5 downloads at once; additional tasks wait in click order.
 - The "词" button opens synced lyrics. "下载任务" shows progress and recent completions; "本地音乐" opens the main workspace for finding, playing, and managing files. Desktop builds support choosing a folder in the download drawer and revealing files from the local library.
 - Search local music by title, artist, or album; combine keywords with a format filter and sort by recently saved, title, or artist. "清除筛选" clears filters and "刷新文件" rereads the folder. Counts show visible and total tracks; filters last for the current page session.

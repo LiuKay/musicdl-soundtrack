@@ -178,25 +178,50 @@ def _cache_limit():
     return min(5120, max(128, value)) * 1024 * 1024
 
 
-def _prune_cache(max_bytes, keep=None):
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    # ponytail: directory mtime is the LRU index; add a database only if this scan becomes slow.
-    with CACHE_LOCK:
-        files = []
-        for name in os.listdir(CACHE_DIR):
-            path = os.path.join(CACHE_DIR, name)
-            if name.endswith('.part') or not os.path.isfile(path):
+def _cache_files():
+    '''List only our audio files; caller holds CACHE_LOCK. Never follow links.'''
+    cache = Path(CACHE_DIR).resolve()
+    downloads = Path(DOWNLOAD_DIR).resolve()
+    if cache == downloads or cache in downloads.parents or downloads in cache.parents:
+        raise OSError('缓存与下载目录重叠，请先调整目录设置')
+    if cache in (Path(cache.anchor), Path.home(), Path(HERE).resolve()):
+        raise OSError('缓存目录设置不安全，请使用独立目录')
+    if not cache.exists():
+        return []
+    files = []
+    with os.scandir(cache) as entries:
+        for entry in entries:
+            match = re.fullmatch(r'([0-9a-f]{64})\.[a-z0-9]+(\.part)?', entry.name)
+            if not match or not entry.is_file(follow_symlinks=False):
                 continue
             try:
-                stat = os.stat(path)
-                files.append((stat.st_mtime, stat.st_size, path, path == keep))
-            except OSError:
-                pass
-        total = sum(size for _, size, _, _ in files)
-        for _, size, path, is_kept in sorted(files):
+                info = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            files.append((entry.path, info.st_size, info.st_mtime,
+                          bool(match[2]), match[1] in CACHE_JOBS))
+    return files
+
+
+def _cache_usage(files):
+    return {
+        'bytes': sum(size for _, size, _, _, _ in files),
+        'files': sum(not partial for _, _, _, partial, _ in files),
+        'partial_bytes': sum(size for _, size, _, partial, _ in files if partial),
+        'active_jobs': len(CACHE_JOBS),
+        'removable_files': sum(not busy for _, _, _, _, busy in files),
+    }
+
+
+def _prune_cache(max_bytes, keep=None):
+    # ponytail: directory mtime is the LRU index; add a database only if this scan becomes slow.
+    with CACHE_LOCK:
+        files = [item for item in _cache_files() if not item[3]]
+        total = sum(item[1] for item in files)
+        for path, size, _, _, busy in sorted(files, key=lambda item: item[2]):
             if total <= max_bytes:
                 break
-            if is_kept:
+            if path == os.path.realpath(keep or CACHE_DIR) or busy:
                 continue
             try:
                 os.remove(path)
@@ -227,8 +252,8 @@ def _cache_audio(entry, path, max_bytes):
                         return
                     fp.write(chunk)
         if written:
-            os.replace(tmp, path)
-            _prune_cache(max_bytes, keep=path)
+            with CACHE_LOCK:
+                os.replace(tmp, path)
     except Exception:
         pass
     finally:
@@ -238,6 +263,12 @@ def _cache_audio(entry, path, max_bytes):
             pass
         with CACHE_LOCK:
             CACHE_JOBS.discard(key)
+        # Reclaim after leaving the busy set, including when concurrent writers
+        # have just published. The last writer must enforce the limit too.
+        try:
+            _prune_cache(max_bytes)
+        except OSError:
+            pass
 
 
 def _start_cache(entry, path, max_bytes):
@@ -1149,6 +1180,31 @@ def api_search():
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
+@app.route('/api/cache', methods=['GET', 'DELETE'])
+def api_cache():
+    try:
+        with CACHE_LOCK:
+            files = _cache_files()
+            removed = freed = failed = 0
+            if request.method == 'DELETE':
+                for path, size, _, _, busy in files:
+                    if busy:
+                        continue
+                    try:
+                        os.remove(path)
+                        removed += 1
+                        freed += size
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        failed += 1
+                files = _cache_files()
+            return jsonify({**_cache_usage(files), 'removed': removed,
+                            'freed_bytes': freed, 'failed': failed})
+    except OSError:
+        return jsonify({'error': '无法管理缓存，请检查目录权限，并确保缓存与下载目录互不包含。'}), 503
+
+
 @app.route('/api/stream/<token>')
 def api_stream(token):
     '''Proxy the upstream audio with Range support so <audio> can seek.'''
@@ -1166,12 +1222,15 @@ def api_stream(token):
             max_bytes = _cache_limit()
             path = _cache_path(entry)
             _prune_cache(max_bytes)
-            if os.path.isfile(path):
-                os.utime(path)
-                return send_file(
-                    path, conditional=True,
-                    mimetype=RESULT_EXT_TO_MIME.get(ext, 'application/octet-stream'),
-                )
+            with CACHE_LOCK:
+                if os.path.isfile(path) and not os.path.islink(path):
+                    os.utime(path)
+                    # Open under the same lock as cleanup. The open response can
+                    # finish on POSIX; platforms locking open files skip deletion.
+                    return send_file(
+                        path, conditional=True,
+                        mimetype=RESULT_EXT_TO_MIME.get(ext, 'application/octet-stream'),
+                    )
             _start_cache(entry, path, max_bytes)
         except OSError:
             pass

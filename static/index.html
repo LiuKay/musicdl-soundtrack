@@ -30,8 +30,9 @@
   </section>
   <div class="sidebar-bottom">
     <div class="cache-controls">
-      <label class="cache-toggle"><span>边听边存</span><input id="cacheToggle" type="checkbox"><span class="cache-switch" aria-hidden="true"></span></label>
+      <label class="cache-toggle"><span>缓存已播放歌曲</span><input id="cacheToggle" type="checkbox"><span class="cache-switch" aria-hidden="true"></span></label>
       <label class="cache-capacity" for="cacheLimit">缓存上限<select id="cacheLimit"><option value="512">512 MB</option><option value="1024" selected>1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option></select></label>
+      <button id="cacheManage" class="cache-manage" type="button" aria-controls="cachePanel" aria-expanded="false">管理播放缓存 →</button>
     </div>
     <p class="sidebar-credit">为喜欢的音乐，留个位置。<span>POWERED BY MUSICDL</span></p>
   </div>
@@ -162,6 +163,21 @@
   <ol id="queueList" class="queue-list"></ol>
 </aside>
 
+<aside class="cache-panel" id="cachePanel" aria-label="播放缓存" inert>
+  <div class="lyrics-head"><span>播放缓存</span><button id="cacheClose" aria-label="关闭缓存面板">✕</button></div>
+  <div class="cache-body">
+    <p class="eyebrow">临时留存，自动腾出空间</p>
+    <p class="cache-usage" id="cacheUsage">正在读取…</p>
+    <p id="cacheStatus" class="cache-status" role="status" aria-live="polite"></p>
+    <div class="cache-actions"><button id="refreshCache" type="button">刷新占用</button><button id="clearCache" type="button" disabled>清理缓存</button></div>
+    <h3>缓存和下载有什么不同？</h3>
+    <p>开启后，开始播放会在后台尝试缓存整首歌曲。缓存成功后可减少重复加载，但不会加入本地音乐，也不保证离线可用。需要长期保留，请点击歌曲的下载按钮。</p>
+    <h3>何时自动清理？</h3>
+    <p>再次缓存播放或保存完成时，按容量上限清理最久未使用的缓存。修改上限在下次缓存播放时生效；正在写入时，占用可能暂时超过上限。</p>
+    <p>清理不影响已下载的音乐；正在写入的缓存暂时保留，稍后可再清理。关闭缓存开关只影响后续播放，已开始的缓存会继续完成。</p>
+  </div>
+</aside>
+
 <!-- Now playing bar -->
 <footer class="player" id="player" data-empty="true">
   <div class="np-meta">
@@ -225,6 +241,13 @@
       <button id="downloadPlanCopy" value="copy" hidden>全部另存一份</button>
       <button class="format-confirm" id="downloadPlanConfirm" value="skip">下载未保存的歌曲</button>
     </div>
+  </form>
+</dialog>
+<dialog class="format-dialog" id="cacheClearDialog" aria-labelledby="cacheClearTitle" aria-describedby="cacheClearHelp">
+  <form method="dialog">
+    <div class="format-heading"><h2 id="cacheClearTitle">清理播放缓存？</h2></div>
+    <p class="format-help" id="cacheClearHelp">已下载的音乐不会删除。正在写入的缓存暂时保留；以后播放可能需要重新加载。</p>
+    <div class="format-actions"><button value="cancel" autofocus>取消</button><button class="format-confirm" value="clear">确认清理</button></div>
   </form>
 </dialog>
 <audio id="audio" crossorigin="anonymous"></audio>

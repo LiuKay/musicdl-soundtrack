@@ -60,6 +60,60 @@ cacheToggle.checked = readPreference('soundtrack-cache-enabled') === '1';
 if ([...cacheLimit.options].some(o => o.value === savedCacheLimit)) cacheLimit.value = savedCacheLimit;
 cacheToggle.onchange = () => writePreference('soundtrack-cache-enabled', cacheToggle.checked ? '1' : '0');
 cacheLimit.onchange = () => writePreference('soundtrack-cache-limit', cacheLimit.value);
+let cacheLoading = false;
+function cacheSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+async function loadCache(clear = false) {
+  if (cacheLoading) return;
+  cacheLoading = true;
+  try {
+    if (clear && !await confirmCacheCleanup()) return;
+    $('#clearCache').disabled = true;
+    $('#refreshCache').disabled = true;
+    $('#cacheStatus').textContent = clear ? '正在清理…' : '正在读取…';
+    const response = await fetch('/api/cache', { method: clear ? 'DELETE' : 'GET' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '无法读取缓存');
+    $('#cacheUsage').textContent = cacheSize(data.bytes);
+    const busy = data.active_jobs ? `，${data.active_jobs} 首正在缓存（暂存 ${cacheSize(data.partial_bytes)}）` : '';
+    $('#cacheStatus').textContent = `${data.files} 首已缓存${busy}。`;
+    $('#clearCache').disabled = data.removable_files === 0;
+    if (clear) {
+      const result = `已清理 ${data.removed} 个文件，释放 ${cacheSize(data.freed_bytes)}`;
+      const remaining = data.failed ? `；${data.failed} 个文件未能清理，请稍后重试` : '';
+      const active = data.active_jobs ? '；正在缓存的歌曲已保留' : '';
+      $('#cacheStatus').textContent = `${result}${remaining}${active}。`;
+      toast(`${result}${remaining}${active}`);
+    }
+  } catch (error) {
+    $('#cacheUsage').textContent = '暂时无法读取';
+    $('#cacheStatus').textContent = error.message || '缓存管理失败，请重试';
+  } finally {
+    cacheLoading = false;
+    $('#refreshCache').disabled = false;
+  }
+}
+function confirmCacheCleanup() {
+  const dialog = $('#cacheClearDialog');
+  if (dialog.open) return Promise.resolve(false);
+  dialog.returnValue = '';
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'clear'), { once: true });
+    dialog.showModal();
+  });
+}
+$('#cacheManage').onclick = () => {
+  const open = !$('#cachePanel').classList.contains('open');
+  setPanel(open ? 'cachePanel' : null);
+  if (open) loadCache();
+};
+$('#cacheClose').onclick = () => setPanel(null);
+$('#refreshCache').onclick = () => loadCache();
+$('#clearCache').onclick = () => loadCache(true);
 const downloadConcurrency = $('#downloadConcurrency');
 const savedDownloadConcurrency = readPreference('soundtrack-download-concurrency');
 if ([...downloadConcurrency.options].some(o => o.value === savedDownloadConcurrency)) {
@@ -831,7 +885,7 @@ function syncLyric(c) {
   }
 }
 function setPanel(name) {
-  [['lyricsPanel', 'lyricsToggle', 'lyricsClose'], ['dlDrawer', 'downloadsButton', 'dlClose'], ['queuePanel', 'queueToggle', 'queueClose']].forEach(([id, trigger, close]) => {
+  [['lyricsPanel', 'lyricsToggle', 'lyricsClose'], ['dlDrawer', 'downloadsButton', 'dlClose'], ['queuePanel', 'queueToggle', 'queueClose'], ['cachePanel', 'cacheManage', 'cacheClose']].forEach(([id, trigger, close]) => {
     const open = name === id;
     const panel = $('#' + id);
     const restoreFocus = !open && panel.contains(document.activeElement);
