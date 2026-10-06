@@ -12,6 +12,57 @@ import desktop
 
 
 class SearchCompatibilityTest(unittest.TestCase):
+    def test_desktop_exit_checks_live_background_tasks_not_page_state(self):
+        window = SimpleNamespace(confirm_close=False)
+        for status in ['queued', 'downloading', 'checking', 'waiting_conversion', 'converting',
+                       'tagging', 'cancelling', 'new-future-stage']:
+            with self.subTest(status=status), mock.patch.object(app, 'DOWNLOADS', {'job': {'status': status}}):
+                desktop._update_close_confirmation(window, app)
+                self.assertTrue(window.confirm_close)
+        with mock.patch.object(app, 'DOWNLOADS', {'job': {'status': 'downloading'}}):
+            desktop._update_close_confirmation(window, app)
+            app.DOWNLOADS['job']['status'] = 'done'
+            desktop._update_close_confirmation(window, app)
+            self.assertFalse(window.confirm_close)
+
+    def test_desktop_exit_does_not_warn_for_finished_or_failed_tasks(self):
+        window = SimpleNamespace(confirm_close=True)
+        for records in [{}, {'a': {'status': 'done'}, 'b': {'status': 'error'}, 'c': {'status': 'cancelled'}}]:
+            with mock.patch.object(app, 'DOWNLOADS', records):
+                desktop._update_close_confirmation(window, app)
+                self.assertFalse(window.confirm_close)
+                self.assertEqual(app.DOWNLOADS, records)
+
+    def test_desktop_exit_failure_keeps_confirmation_and_does_not_mutate_tasks(self):
+        window = SimpleNamespace(confirm_close=False)
+        broken = SimpleNamespace(DL_LOCK=mock.MagicMock(), DOWNLOADS=None)
+        with self.assertRaises(AttributeError):
+            desktop._update_close_confirmation(window, broken)
+        self.assertTrue(window.confirm_close)
+
+    def test_desktop_exit_warns_while_submission_has_not_created_a_task_yet(self):
+        window = SimpleNamespace(confirm_close=False)
+        with mock.patch.object(app, 'DOWNLOADS', {}), mock.patch.object(app, 'DOWNLOAD_REQUESTS_IN_FLIGHT', 0):
+            @app._track_download_request
+            def submitting():
+                desktop._update_close_confirmation(window, app)
+                self.assertTrue(window.confirm_close)
+                self.assertEqual(app.DOWNLOAD_REQUESTS_IN_FLIGHT, 1)
+                raise ValueError('submission failed')
+            with self.assertRaises(ValueError):
+                submitting()
+            self.assertEqual(app.DOWNLOAD_REQUESTS_IN_FLIGHT, 0)
+            desktop._update_close_confirmation(window, app)
+            self.assertFalse(window.confirm_close)
+
+    def test_download_submission_routes_hold_exit_guard_even_before_validation(self):
+        with mock.patch.object(app, 'DOWNLOAD_REQUESTS_IN_FLIGHT', 0):
+            for route in [app.api_download, app.api_library_export, app.api_retry_download]:
+                self.assertTrue(hasattr(route, '__wrapped__'))
+            for url in ['/api/download', '/api/library/export', '/api/download/missing/retry']:
+                app.app.test_client().post(url, json={})
+                self.assertEqual(app.DOWNLOAD_REQUESTS_IN_FLIGHT, 0)
+
     def test_playback_identity_survives_tokens_and_distinguishes_versions(self):
         song = SimpleNamespace(source='MiguMusicClient', identifier='song-1', ext='mp3',
                                song_name='Song', singers='Artist', album='', file_size='100',
@@ -43,9 +94,13 @@ class SearchCompatibilityTest(unittest.TestCase):
                 mock.patch.object(desktop.webview, 'create_window') as create_window, \
                 mock.patch.object(desktop.webview, 'start') as start, \
                 mock.patch.dict(os.environ, {}, clear=False):
+            closing = create_window.return_value.events.closing
             desktop.main()
             make_server.assert_called_once_with('127.0.0.1', 42001, app.app, threaded=True)
             self.assertEqual(create_window.call_args.args[1], 'http://127.0.0.1:42001')
+            self.assertTrue(create_window.call_args.kwargs['confirm_close'])
+            self.assertIn('不会自动恢复', create_window.call_args.kwargs['localization']['global.quitConfirmation'])
+            closing.__iadd__.assert_called_once()
             self.assertFalse(start.call_args.kwargs['private_mode'])
             self.assertEqual(start.call_args.kwargs['storage_path'], str(desktop.SETTINGS_DIR / 'webview'))
             make_server.return_value.shutdown.assert_called_once()

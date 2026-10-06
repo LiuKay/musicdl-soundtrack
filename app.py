@@ -24,6 +24,7 @@ import threading
 import requests
 from collections import deque
 from copy import copy
+from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
 from flask import (
@@ -426,6 +427,21 @@ DOWNLOAD_QUEUE_LOCK = threading.Lock()
 TRANSCODE_LOCK = threading.Lock()
 DOWNLOAD_REQUEST_LOCK = threading.Lock()
 DOWNLOAD_TERMINAL = {'done', 'error', 'cancelled'}
+DOWNLOAD_REQUESTS_IN_FLIGHT = 0
+
+
+def _track_download_request(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        global DOWNLOAD_REQUESTS_IN_FLIGHT
+        with DL_LOCK:
+            DOWNLOAD_REQUESTS_IN_FLIGHT += 1
+        try:
+            return view(*args, **kwargs)
+        finally:
+            with DL_LOCK:
+                DOWNLOAD_REQUESTS_IN_FLIGHT -= 1
+    return wrapped
 
 
 def _download_identity(entry):
@@ -1242,6 +1258,7 @@ def api_lyric(token):
 
 
 @app.route('/api/download', methods=['POST'])
+@_track_download_request
 def api_download():
     data = request.get_json(force=True, silent=True) or {}
     if not isinstance(data, dict) or not isinstance(data.get('token'), str):
@@ -1283,6 +1300,7 @@ def api_download_plan():
 
 
 @app.route('/api/library/export', methods=['POST'])
+@_track_download_request
 def api_library_export():
     data = request.get_json(silent=True)
     if (not isinstance(data, dict) or data.get('format') != 'mp3'
@@ -1323,6 +1341,7 @@ def api_downloads():
 
 
 @app.route('/api/download/<download_id>/retry', methods=['POST'])
+@_track_download_request
 def api_retry_download(download_id):
     rec = _get_dl(download_id)
     if rec.get('status') != 'error':

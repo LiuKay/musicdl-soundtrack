@@ -31,8 +31,65 @@ function element() {
 function helper(name, context = {}) {
   const match = source.match(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`));
   assert.ok(match, `${name} is present`);
-  return vm.runInNewContext(`(${match[0]})`, context);
+  return vm.runInNewContext(`(${match[0]})`, { pendingDownloadRequests: 0, updateLeaveWarning() {}, ...context });
 }
+
+function leaveWarningContext() {
+  const notice = element();
+  const listeners = new Map();
+  const context = vm.createContext({ downloadTasks: new Map(), pendingDownloadRequests: 0,
+    desktopReady: false, leaveWarningEnabled: false, $: () => notice,
+    window: { addEventListener: (name, fn) => listeners.set(name, fn),
+      removeEventListener: name => listeners.delete(name) } });
+  for (const name of ['unfinishedDownloadCount', 'handleBeforeUnload', 'updateLeaveWarning']) {
+    vm.runInContext(source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))[0], context);
+  }
+  return { context, notice, listeners };
+}
+
+test('leave warning covers every active stage but not completed, failed or cancelled tasks', () => {
+  const { context, notice, listeners } = leaveWarningContext();
+  for (const status of ['queued', 'downloading', 'checking', 'waiting_conversion', 'converting', 'tagging', 'cancelling']) {
+    context.downloadTasks.set('job', { status }); context.updateLeaveWarning();
+    assert.equal(listeners.has('beforeunload'), true);
+    assert.match(notice.textContent, /还有 1 项/);
+    assert.match(notice.textContent, /保持后台程序运行/);
+  }
+  for (const status of ['done', 'error', 'cancelled']) {
+    context.downloadTasks.set('job', { status }); context.updateLeaveWarning();
+    assert.equal(listeners.has('beforeunload'), false);
+    assert.equal(notice.dataset.active, 'false');
+  }
+});
+
+test('pending submissions warn immediately and desktop bridge prevents duplicate browser dialogs', () => {
+  const { context, notice, listeners } = leaveWarningContext();
+  context.pendingDownloadRequests = 1; context.updateLeaveWarning();
+  const event = { preventDefault() { this.prevented = true; } };
+  listeners.get('beforeunload')(event);
+  assert.equal(event.prevented, true);
+  assert.equal(event.returnValue, '');
+  assert.match(notice.textContent, /正在提交/);
+  context.desktopReady = true; context.updateLeaveWarning();
+  assert.equal(listeners.has('beforeunload'), false);
+  assert.match(notice.textContent, /退出声轨会中断/);
+  assert.match(notice.textContent, /已完成文件会保留/);
+  const desktopEvent = { preventDefault() { assert.fail('desktop uses native confirmation'); } };
+  context.handleBeforeUnload(desktopEvent);
+});
+
+test('failed download submissions remove the leave guard without leaving phantom work', async () => {
+  const { context, listeners } = leaveWarningContext();
+  let reject;
+  Object.assign(context, { tracks: new Map([['song', {}]]), downloadingTokens: new Set(),
+    fetch: () => new Promise((_, fail) => { reject = fail; }), toast() {} });
+  vm.runInContext(source.match(/async function startDownload\([^]*?\n\}/)[0], context);
+  const pending = context.startDownload('song', null);
+  assert.equal(listeners.has('beforeunload'), true);
+  reject(Error('offline')); await pending;
+  assert.equal(context.pendingDownloadRequests, 0);
+  assert.equal(listeners.has('beforeunload'), false);
+});
 
 function revealHandler(reveal, toast = () => {}) {
   const match = source.match(/li\.querySelector\('\.library-reveal'\)\.onclick = (async \([^)]*\) => \{[^]*?\n      \});/);

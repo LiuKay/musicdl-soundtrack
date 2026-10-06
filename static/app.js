@@ -28,6 +28,8 @@ let sources = [];
 let desktopReady = false;
 const downloadTasks = new Map();
 let downloadPlanning = false;
+let pendingDownloadRequests = 0;
+let leaveWarningEnabled = false;
 let markerTimer;
 let markerRequestId = 0;
 const savedSession = SessionState.read();
@@ -1051,6 +1053,7 @@ function invalidateLibrary() {
 
 window.addEventListener('pywebviewready', async () => {
   desktopReady = true;
+  updateLeaveWarning();
   document.querySelectorAll('.library-item').forEach(item => item.classList.add('desktop'));
   document.querySelectorAll('.library-reveal').forEach(button => { button.hidden = false; });
   const button = $('#chooseDownloadDir');
@@ -1256,6 +1259,8 @@ async function refreshDownloadMarkers(requestId) {
 
 async function exportLocalMp3(track, button) {
   button.disabled = true;
+  pendingDownloadRequests++;
+  updateLeaveWarning();
   try {
     const send = duplicate => fetch('/api/library/export', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1278,6 +1283,8 @@ async function exportLocalMp3(track, button) {
     toast(err.message || '导出失败');
   } finally {
     button.disabled = false;
+    pendingDownloadRequests--;
+    updateLeaveWarning();
   }
 }
 
@@ -1327,6 +1334,8 @@ async function startDownload(token, btn, format = 'mp3', duplicate = false) {
     if (btn) btn.classList.remove('busy');
   };
   if (btn) btn.classList.add('busy');
+  pendingDownloadRequests++;
+  updateLeaveWarning();
   try {
     const res = await fetch('/api/download', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1340,6 +1349,9 @@ async function startDownload(token, btn, format = 'mp3', duplicate = false) {
     return true;
   } catch {
     toast('下载启动失败'); release(); return false;
+  } finally {
+    pendingDownloadRequests--;
+    updateLeaveWarning();
   }
 }
 
@@ -1369,7 +1381,35 @@ function removeDlItem(item) {
   refreshTaskCounts();
 }
 
+function unfinishedDownloadCount() {
+  return [...downloadTasks.values()].filter(task => !['done', 'error', 'cancelled'].includes(task.status)).length;
+}
+
+function handleBeforeUnload(event) {
+  if (desktopReady || (!unfinishedDownloadCount() && !pendingDownloadRequests)) return;
+  event.preventDefault();
+  event.returnValue = ''; // Browsers show their own text, not an application message.
+}
+
+function updateLeaveWarning() {
+  const count = unfinishedDownloadCount();
+  const active = count > 0 || pendingDownloadRequests > 0;
+  const enabled = active && !desktopReady;
+  if (enabled !== leaveWarningEnabled) {
+    window[enabled ? 'addEventListener' : 'removeEventListener']('beforeunload', handleBeforeUnload);
+    leaveWarningEnabled = enabled;
+  }
+  const prefix = count ? `还有 ${count} 项下载或转换未完成。` : pendingDownloadRequests ? '正在提交任务，请等待确认。' : '';
+  const message = prefix + (desktopReady
+    ? '退出声轨会中断未完成任务，重新打开后需要重新添加。已完成文件会保留；可最小化窗口继续等待。'
+    : '关闭此页面不会停止已提交的任务，但请保持后台程序运行。停止后台后，未完成任务需要重新添加。');
+  const notice = $('#downloadExitNotice');
+  if (notice.textContent !== message) notice.textContent = message;
+  notice.dataset.active = String(active);
+}
+
 function refreshTaskCounts() {
+  updateLeaveWarning();
   dlCount = [...downloadTasks.values()].filter(task => !['done', 'cancelled'].includes(task.status)).length;
   fab.querySelector('.badge').textContent = dlCount;
   fab.classList.toggle('has', dlCount > 0);
@@ -1385,6 +1425,8 @@ async function retryDownloadTask(id) {
   const button = task.item.querySelector('.dl-retry');
   if (button.disabled) return false;
   button.disabled = true;
+  pendingDownloadRequests++;
+  updateLeaveWarning();
   try {
     const response = await fetch(`/api/download/${id}/retry`, { method: 'POST' });
     const data = await response.json();
@@ -1401,6 +1443,8 @@ async function retryDownloadTask(id) {
     return false;
   } finally {
     button.disabled = false;
+    pendingDownloadRequests--;
+    updateLeaveWarning();
   }
 }
 
@@ -1581,6 +1625,7 @@ function handleShortcuts(e) {
 document.addEventListener('keydown', handleShortcuts);
 
 showNoLyrics();
+updateLeaveWarning();
 restoreSession();
 loadSources();
 restoreDownloads();
