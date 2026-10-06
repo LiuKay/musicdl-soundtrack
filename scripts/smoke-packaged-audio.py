@@ -70,7 +70,7 @@ def main():
             assert .9 <= info.length <= 1.2, info.length
             assert info.bitrate >= 300000, info.bitrate
             assert source.read_bytes() == original, 'Original audio was modified'
-            print('PASS: packaged app uses bundled tools with empty PATH; WAV → MP3; original preserved')
+            print('PASS: packaged app uses bundled tools with empty PATH; WAV -> MP3; original preserved')
         finally:
             if process.poll() is None:
                 process.terminate()
