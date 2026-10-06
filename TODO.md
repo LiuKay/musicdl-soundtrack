@@ -36,16 +36,16 @@
 - [ ] 根据使用频率决定收藏与歌单导入的优先级。
 - [ ] 补充屏幕阅读器、键盘遍历、低对比度文字和触控目标检查。
 
-## 下一版本：内置 MP3 转换
+## v0.7.0：内置 MP3 转换
 
 - [x] 从固定、校验哈希的 FFmpeg / LAME 源码构建精简音频工具，禁用网络输入、视频编码和 GPL / nonfree 组件。
 - [x] macOS 与 Windows 打包接入内置工具，保留显式路径配置和源码运行时系统工具回退；运行时不下载或安装工具。
 - [x] 实测转换能力并缓存结果，支持手动重查；下载面板区分内置就绪、工具异常和检测服务失败。
 - [x] 应用内附完整许可证，发布流程上传对应源码和精确构建脚本；同步中英文 README。
 - [x] 使用内置工具运行回归测试；本地 macOS 打包后清空 PATH，真实转换 WAV 为 MP3 并验证原文件保留。
-- [ ] 发布前在 Windows CI 运行完整构建与无系统工具的转换验收。
+- [x] 发布前在 Windows CI 运行完整构建与无系统工具的转换验收。
 
-验收记录：81 项 Python、66 项前端测试通过；macOS 精简工具约 4.3 MB，打包后无需系统 FFmpeg 完成 MP3 导出；FLAC、AAC、M4A（AAC / ALAC）、OGG / Vorbis、Opus、AIFF、WAV、WMA、WavPack 使用生成素材转换通过。[桌面转换状态与重新检测](docs/bundled-mp3-desktop.png)。应用和脚本未发布；Windows 实际运行验证待 CI。
+验收记录：81 项 Python、66 项前端测试通过；macOS 精简工具约 4.3 MB，打包后无需系统 FFmpeg 完成 MP3 导出；FLAC、AAC、M4A（AAC / ALAC）、OGG / Vorbis、Opus、AIFF、WAV、WMA、WavPack 使用生成素材转换通过。[桌面转换状态与重新检测](docs/bundled-mp3-desktop.png)。2026-10-07，[macOS CI](https://github.com/LiuKay/musicdl-soundtrack/actions/runs/37544320748) 与 [Windows CI](https://github.com/LiuKay/musicdl-soundtrack/actions/runs/37544326401) 均通过打包、清空 PATH 的实际转换及原文件保留检查；Windows 验收脚本的控制台编码问题已修复。安装包与两平台音频工具对应源码随 [v0.7.0 Release](https://github.com/LiuKay/musicdl-soundtrack/releases/tag/v0.7.0) 交付。
 
 ## 本轮验收
 
