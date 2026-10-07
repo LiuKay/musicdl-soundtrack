@@ -1,0 +1,76 @@
+name: Windows validation
+run-name: Windows validation · ${{ inputs.ref || github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to validate (blank uses selected branch)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - name: Record tested commit
+        id: revision
+        shell: pwsh
+        run: |
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+          "Tested commit: $commit" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: make curl tar xz mingw-w64-ucrt-x86_64-gcc
+      - name: Build audio tools from pinned sources
+        shell: msys2 {0}
+        run: bash scripts/build-audio-tools.sh
+      - name: Build desktop app
+        shell: pwsh
+        run: .\build-windows.ps1 -SkipAudioBuild
+      - name: Regression tests with bundled audio tools
+        shell: pwsh
+        run: |
+          $env:SOUNDTRACK_FFMPEG = (Resolve-Path build/audio-tools/bin/ffmpeg.exe).Path
+          $env:SOUNDTRACK_FFPROBE = (Resolve-Path build/audio-tools/bin/ffprobe.exe).Path
+          python -m unittest -v test_app.py test_audio_formats.py test_download_workflow.py test_task_recovery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test test_ui.cjs test_session.cjs test_favorites.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify packaged app, restart and system Trash
+        shell: pwsh
+        run: python scripts/smoke-packaged-audio.py dist/Soundtrack/Soundtrack.exe
+      - name: Package validation files
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\Soundtrack -DestinationPath Soundtrack-Windows-validation.zip
+          Copy-Item build/audio-tools/audio-tools-source.tar.gz Soundtrack-audio-sources-Windows-validation.tar.gz
+      - name: Save validation build and corresponding audio sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: Soundtrack-Windows-validation-${{ steps.revision.outputs.commit }}
+          path: |
+            Soundtrack-Windows-validation.zip
+            Soundtrack-audio-sources-Windows-validation.tar.gz
+          if-no-files-found: error
+          retention-days: 7

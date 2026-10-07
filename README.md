@@ -117,6 +117,12 @@ python -m unittest -v test_app.py test_audio_formats.py test_download_workflow.p
 
 前端回归测试不需要额外 Node.js 依赖，覆盖队列隔离、循环/随机、批量预检、重复确认、失败重试、任务恢复、资料库筛选排序及目录切换失败、异步响应竞争、面板和键盘操作。后端覆盖展示信息清理、跨搜索识别、并发判重、路径校验、文件保护与真实本地导出；测试使用隔离目录和生成的音频。真实音乐源仍需联网手动验证。
 
+## 打包验收
+
+发布前可在 GitHub Actions 手动运行 **Windows validation**，对已推送的分支、Tag 或提交执行 Windows 构建、回归和打包实测；通过后提供保留 7 天的测试安装包与对应音频源码，不创建 Release。具体点击步骤见[网页发布指南](docs/releasing.md#发布前先验收-windows)。
+
+macOS 打包后可运行 `.venv/bin/python scripts/smoke-packaged-audio.py dist/Soundtrack.app/Contents/MacOS/Soundtrack`；Windows 使用 `python scripts/smoke-packaged-audio.py dist/Soundtrack/Soundtrack.exe`。先关闭正在运行的声轨。脚本使用生成音频验证资源、任务恢复、内置 MP3 转换、重启及系统废纸篓；一秒静音 WAV 会留在废纸篓中，可恢复。macOS 会临时复制并以独立应用标识签名，避免使用日常 WebKit 数据；结束清理测试副本与专属缓存，不修改原应用包。该测试不包含真实平台或读屏验收。
+
 ## 结构
 
 ```

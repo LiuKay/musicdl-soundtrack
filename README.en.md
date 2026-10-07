@@ -128,6 +128,12 @@ python -m unittest -v test_app.py test_audio_formats.py test_download_workflow.p
 
 Frontend regression tests need no extra Node.js packages and cover queue isolation, repeat/shuffle, batch preflight, duplicate confirmation, retries, task restoration, library filtering/sorting and failed folder changes, stale responses, drawers, and keyboard controls. Backend tests cover display cleanup, identity across searches, concurrent deduplication, path validation, file preservation, and real local exports using isolated directories and generated audio. Live music providers still require manual online verification.
 
+## Packaged verification
+
+Before publishing, manually run **Windows validation** in GitHub Actions against a pushed branch, tag, or commit. It builds on Windows, runs regressions and packaged smoke checks, then retains the test build and corresponding audio sources for 7 days. It does not create a Release. See the [step-by-step guide](docs/releasing.md#发布前先验收-windows).
+
+After packaging, run `.venv/bin/python scripts/smoke-packaged-audio.py dist/Soundtrack.app/Contents/MacOS/Soundtrack` on macOS, or `python scripts/smoke-packaged-audio.py dist/Soundtrack/Soundtrack.exe` on Windows. Close any running Soundtrack instance first. The script uses generated audio to verify assets, task recovery, bundled MP3 conversion, restart, and system Trash. A one-second silent WAV remains recoverable in Trash. On macOS it temporarily copies and signs the bundle with a separate app identity to avoid sharing everyday WebKit data, then removes the test copy and its dedicated caches; the original bundle is unchanged. Live providers and screen readers require separate testing.
+
 ## Structure
 
 ```

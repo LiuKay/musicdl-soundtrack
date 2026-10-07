@@ -2,6 +2,19 @@
 
 发布前，先把代码提交并 push 到 `main`，更新 `CHANGELOG.md`，确认本地测试通过。GitHub 只能发布已经推送的代码，无法读取电脑上尚未提交的改动。
 
+## 发布前先验收 Windows
+
+首次使用时，先将 `.github/workflows/windows-validation.yml` 合入并推送到默认分支 `main`，否则 GitHub 不会显示它的手动运行入口。
+
+1. 打开 [Actions](https://github.com/LiuKay/musicdl-soundtrack/actions)，左侧选择 **Windows validation**。
+2. 点击 **Run workflow**，分支选 `main`。下方 **Branch, tag or commit to validate** 留空即可测试所选分支；要测试其他已推送的代码，可填分支、Tag 或完整提交 SHA。
+3. 点击绿色 **Run workflow**。等待音频工具构建、应用打包、Python / JavaScript 回归、实际安装包转换和重启/回收站验收全部通过；任一步失败，后续步骤不会上传测试包。
+4. 打开该次运行，在 **Summary** 查看 **Tested commit**，确认与准备发布的提交一致。页面下方 **Artifacts** 中有 `Soundtrack-Windows-validation-提交SHA`，保留 7 天。
+5. 下载并解压 Artifact，再解压其中的 `Soundtrack-Windows-validation.zip`，运行 `Soundtrack/Soundtrack.exe`。旁边的 `Soundtrack-audio-sources-Windows-validation.tar.gz` 是音频工具对应源码；测试包仅供验收，不自动成为正式版本。
+6. 在 Windows 桌面补测收藏退出重启保留、下载/删除确认和 NVDA 朗读。自动化通过不代表交互和读屏都已通过。
+
+这个工作流只有仓库读取权限，不创建或修改 Release。现有 **Windows release** 仍用于正式发布，不要用它代替发布前的验证。
+
 ## 发布一个新版本
 
 1. 打开[项目 Releases 页面](https://github.com/LiuKay/musicdl-soundtrack/releases)，点击 **Draft a new release**（起草新版本）。
