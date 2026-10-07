@@ -111,7 +111,7 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`; keep its supporti
 
 You can keep listening to the current queue while searching for other music.
 
-### Favorites (next release)
+### Favorites (since v0.8.0)
 
 Select search results and choose "收藏所选", or click ☆ in the player to save the current track, including local music. ★ indicates a saved favorite. "我的收藏" supports title/artist/album filtering, playing the filtered list, searching again, and removal. Removing a favorite does not delete files or change the active queue.
 
