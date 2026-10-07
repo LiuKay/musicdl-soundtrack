@@ -32,5 +32,6 @@ Remove-Item -Recurse -Force 'build\pyinstaller', 'dist\Soundtrack' -ErrorAction 
     --collect-all fake_useragent `
     --collect-all musicdl `
     --collect-all webview `
+    --collect-all send2trash `
     desktop.py
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

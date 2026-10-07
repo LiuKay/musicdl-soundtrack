@@ -24,6 +24,8 @@ const sourceStates = new Map();
 let batchDownloading = false;
 let currentToken = null;
 let searchES = null;
+const sourceRetries = new Map();
+let searchQuery = '';
 let sources = [];
 let desktopReady = false;
 const downloadTasks = new Map();
@@ -103,6 +105,16 @@ function confirmCacheCleanup() {
   dialog.returnValue = '';
   return new Promise(resolve => {
     dialog.addEventListener('close', () => resolve(dialog.returnValue === 'clear'), { once: true });
+    dialog.showModal();
+  });
+}
+function confirmMusicTrash(name) {
+  const dialog = $('#musicTrashDialog');
+  if (dialog.open) return Promise.resolve(false);
+  $('#musicTrashName').textContent = `将“${name}”移至废纸篓？`;
+  dialog.returnValue = '';
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'trash'), { once: true });
     dialog.showModal();
   });
 }
@@ -237,7 +249,7 @@ $('#browseButton').onclick = () => { setView('search'); $('#searchInput').focus(
 
 function setView(view) {
   setPanel(null);
-  for (const [name, button] of [['search', 'browseButton'], ['library', 'libraryButton']]) {
+  for (const [name, button] of [['search', 'browseButton'], ['library', 'libraryButton'], ['favorites', 'favoritesButton']]) {
     const selected = view === name;
     $('#' + name + 'View').hidden = !selected;
     $('#' + button).classList.toggle('selected', selected);
@@ -255,6 +267,101 @@ async function openLibrary() {
 }
 $('#libraryButton').onclick = $('#openLocalLibrary').onclick = openLibrary;
 
+/* Favorites retain metadata, while playback reuses exact-identity resolution. */
+function updateFavoriteCurrent() {
+  const track = tracks.get(currentToken), button = $('#favoriteCurrent');
+  const state = FavoritesState.read();
+  const saved = !!track && state.items.some(item => FavoritesState.key(item) === FavoritesState.key(track));
+  button.disabled = !FavoritesState.key(track) || !!state.error;
+  button.setAttribute('aria-pressed', String(saved));
+  button.setAttribute('aria-label', `${saved ? '取消收藏' : '收藏'} ${track?.song_name || '当前歌曲'}`);
+  button.title = state.error || (button.disabled ? '需要可靠曲目信息才能收藏' : (saved ? '取消收藏' : '收藏当前歌曲'));
+  button.textContent = saved ? '★' : '☆';
+}
+
+function favoriteResult(result) {
+  renderFavorites(result);
+  updateFavoriteCurrent();
+  if (result.error) toast(result.error);
+  else if (result.removed) toast('已取消收藏，音乐文件和播放队列仍保留');
+  else toast(`新增 ${result.added || 0} 首收藏${result.skipped ? `；${result.skipped} 首缺少可靠身份或超出 200 首上限` : '，重复项已跳过'}`);
+}
+
+function filteredFavorites(items) {
+  const terms = $('#favoritesSearch').value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return items.filter(item => terms.every(term => `${item.song_name} ${item.singers} ${item.album}`.toLocaleLowerCase().includes(term)));
+}
+
+function playFavorites(items, index = 0) {
+  if (!items.length) return;
+  // Reuse aliases already in the queue; never replace a currently resolving track.
+  const tokens = items.map(item => {
+    const token = 'favorite-' + encodeURIComponent(FavoritesState.key(item));
+    if (!tracks.has(token)) tracks.set(token, { ...item, token, pendingResolution: true });
+    return token;
+  });
+  play(tokens[index], tokens);
+}
+
+function renderFavorites(state = FavoritesState.read()) {
+  const list = $('#favoritesList'), items = filteredFavorites(state.items);
+  // Preserve a focused row action when another tab updates the collection.
+  const focused = document.activeElement?.closest('#favoritesList button');
+  const focusedKey = focused?.dataset.favoriteKey, action = focused?.dataset.action;
+  list.replaceChildren();
+  $('#favoritesError').hidden = !state.error;
+  $('#favoritesError').textContent = state.error;
+  $('#favoritesCount').textContent = `${items.length} / ${state.items.length} 首 · 最近收藏在前`;
+  $('#playFavorites').disabled = !items.length;
+  $('#playFavorites').onclick = () => playFavorites(items);
+  items.forEach((item, index) => {
+    const row = document.createElement('li'); row.className = 'favorite-item';
+    const meta = document.createElement('div'); meta.className = 'favorite-meta';
+    const name = document.createElement('strong'); name.textContent = item.song_name;
+    const detail = document.createElement('small');
+    detail.textContent = [item.singers, item.album, item.local ? '本地文件' : (sources.find(source => source.id === item.source_id)?.label || item.source_id), item.ext.toUpperCase()].filter(Boolean).join(' · ');
+    meta.append(name, detail); row.append(meta);
+    const actions = document.createElement('div'); actions.className = 'favorite-actions';
+    const addAction = (actionName, text, label, callback) => {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = text;
+      button.dataset.favoriteKey = FavoritesState.key(item); button.dataset.action = actionName;
+      button.setAttribute('aria-label', `${label} ${item.song_name}`); button.onclick = callback;
+      actions.append(button);
+    };
+    addAction('play', '播放', '播放', () => playFavorites(items, index));
+    addAction('find', item.local ? '本地音乐' : '重新查找', item.local ? '查看本地音乐' : '重新查找', () => {
+      if (item.local) openLibrary();
+      else { $('#searchInput').value = `${item.song_name} ${item.singers}`.trim(); runSearch([item.source_id]); }
+    });
+    addAction('remove', '取消收藏', '取消收藏', () => favoriteResult(FavoritesState.remove(item)));
+    row.append(actions); list.append(row);
+  });
+  if (!items.length) {
+    const empty = document.createElement('li'); empty.className = 'dl-empty';
+    empty.textContent = state.error ? '收藏暂不可用，原记录仍保留' : state.items.length ? '没有匹配的收藏，试试其他关键词' : '还没有收藏。在搜索结果勾选歌曲后点击「收藏所选」。';
+    list.append(empty);
+  }
+  if (focusedKey) {
+    const buttons = [...list.querySelectorAll('button')];
+    (buttons.find(button => button.dataset.favoriteKey === focusedKey && button.dataset.action === action)
+      || buttons[0] || $('#favoritesSearch')).focus();
+  }
+}
+
+$('#favoritesButton').onclick = () => { setView('favorites'); renderFavorites(); updateFavoriteCurrent(); $('#favoritesSearch').focus(); };
+$('#favoritesSearch').addEventListener('input', () => renderFavorites());
+$('#favoriteSelected').onclick = () => favoriteResult(FavoritesState.add(queue.filter(token => selectedTokens.has(token)).map(token => tracks.get(token))));
+$('#favoriteCurrent').onclick = () => {
+  const track = tracks.get(currentToken);
+  if (!track) return;
+  const state = FavoritesState.read();
+  favoriteResult(state.error ? state : state.items.some(item => FavoritesState.key(item) === FavoritesState.key(track))
+    ? FavoritesState.remove(track) : FavoritesState.add([track]));
+};
+window.addEventListener('storage', event => {
+  if (event.key === null || event.key === FavoritesState.storageKey) { renderFavorites(); updateFavoriteCurrent(); }
+});
+
 function showSearchMessage(title, message) {
   $('#resultsHead').hidden = true;
   $('#placeholder').hidden = false;
@@ -262,12 +369,15 @@ function showSearchMessage(title, message) {
   $('#placeholder p').textContent = message;
 }
 
-function runSearch() {
+function runSearch(sourceOverride = null) {
   const q = $('#searchInput').value.trim();
   if (!q) return;
   rememberSearch(q);
   setView('search');
   if (searchES) { searchES.close(); searchES = null; }
+  sourceRetries.forEach(es => es.close());
+  sourceRetries.clear();
+  searchQuery = q;
 
   queue = [];
   selectedTokens.clear();
@@ -282,7 +392,7 @@ function runSearch() {
   $('#resultsHead').hidden = false;
   $('#searchBtn').disabled = true;
 
-  const srcs = activeSources();
+  const srcs = sourceOverride || activeSources();
   srcs.forEach(id => setSourceState(id, 'busy', '等待响应'));
   const pending = new Set(srcs);
   let count = 0;
@@ -302,7 +412,7 @@ function runSearch() {
     updateSelection();
     if (count === 0) showSpotlight(t);
     count++;
-    setStatus(true, `已找到 ${count} 首…`);
+    setStatus(true, `已找到 ${queue.length} 首…`);
   });
   es.addEventListener('source_start', (ev) => {
     if (searchES !== es) return;
@@ -327,13 +437,13 @@ function runSearch() {
     es.close(); searchES = null;
     $('#searchBtn').disabled = false;
     scheduleDownloadMarkers();
-    if (count === 0) {
+    if (queue.length === 0) {
       const failed = [...sourceStates.values()].some(s => ['error', 'warning'].includes(s.state));
       showSearchMessage(failed ? '部分来源未能完成搜索' : '没有找到结果',
         failed ? '查看上方来源状态，稍后重试或换个音乐来源。' : '换个关键词，或启用更多音乐来源再试试。');
-      setStatus(false, '');
+      setStatus(sourceRetries.size > 0, sourceRetries.size ? '重试中…' : '');
     } else {
-      setStatus(false, `共 ${count} 首`);
+      setStatus(sourceRetries.size > 0, `共 ${queue.length} 首`);
     }
   });
   es.onerror = () => {
@@ -341,8 +451,59 @@ function runSearch() {
     pending.forEach(id => setSourceState(id, 'error', '连接中断'));
     es.close(); searchES = null;
     $('#searchBtn').disabled = false;
-    setStatus(false, count ? `共 ${count} 首` : '');
-    if (count === 0) showSearchMessage('连接暂时中断', '请重新搜索，或切换音乐来源后再试。');
+    setStatus(sourceRetries.size > 0, queue.length ? `共 ${queue.length} 首` : '');
+    if (queue.length === 0) showSearchMessage('连接暂时中断', '可重试失败来源，或切换音乐来源后再试。');
+  };
+}
+
+function retrySource(id) {
+  if (!searchQuery || sourceRetries.has(id) || !['error', 'warning'].includes(sourceStates.get(id)?.state)) return;
+  const es = new EventSource(`/api/search?q=${encodeURIComponent(searchQuery)}&sources=${encodeURIComponent(id)}`);
+  sourceRetries.set(id, es);
+  setSourceState(id, 'busy', '重试中');
+  setStatus(true, `已找到 ${queue.length} 首…`);
+  const current = () => sourceRetries.get(id) === es;
+  const finish = () => {
+    if (!current()) return;
+    es.close(); sourceRetries.delete(id);
+    renderSourceStates();
+    setStatus(Boolean(searchES) || sourceRetries.size > 0, queue.length ? `共 ${queue.length} 首` : '');
+    scheduleDownloadMarkers();
+  };
+  es.addEventListener('result', ev => {
+    if (!current()) return;
+    const t = JSON.parse(ev.data);
+    if (t.source_id !== id) return;
+    if (queue.some(token => {
+      const old = tracks.get(token);
+      return token === t.token || (t.identity && old?.source_id === id && old.identity === t.identity);
+    })) return;
+    tracks.set(t.token, t); queue.push(t.token);
+    $('#placeholder').hidden = true;
+    $('#resultsHead').hidden = false;
+    addRow(t); updateSelection();
+    if (queue.length === 1) showSpotlight(t);
+    setStatus(true, `已找到 ${queue.length} 首…`);
+  });
+  es.addEventListener('source_done', ev => {
+    if (!current()) return;
+    const d = JSON.parse(ev.data);
+    if (d.source !== id) return;
+    setSourceState(id, d.timed_out || d.error_count ? 'warning' : 'done',
+      `${d.count || 0} 首${d.timed_out ? ' · 超时' : d.error_count ? ' · 部分请求失败' : ' · 完成'}`);
+  });
+  es.addEventListener('source_error', ev => {
+    if (current()) setSourceState(id, 'error', sourceErrorMessage(JSON.parse(ev.data)));
+  });
+  es.addEventListener('done', () => {
+    if (!current()) return;
+    if (sourceStates.get(id)?.state === 'busy') setSourceState(id, 'error', '未收到来源结果');
+    finish();
+    if (!queue.length && !searchES && !sourceRetries.size) showSearchMessage('没有找到结果', '可重试失败来源，或换个关键词。');
+  });
+  es.onerror = () => {
+    if (!current()) return;
+    setSourceState(id, 'error', '连接中断'); finish();
   };
 }
 
@@ -359,12 +520,42 @@ function setSourceState(id, state, text) {
 
 function renderSourceStates() {
   const wrap = $('#sourceStatusList');
-  wrap.replaceChildren();
+  for (const child of [...wrap.children]) {
+    if (!sourceStates.has(child.dataset.source)) child.remove();
+  }
   sourceStates.forEach(({ state, text }, id) => {
-    const status = document.createElement('span');
+    let status = [...wrap.children].find(child => child.dataset.source === id);
+    if (!status) {
+      status = document.createElement('span');
+      status.dataset.source = id;
+      status.tabIndex = -1;
+      const label = document.createElement('span');
+      label.setAttribute('role', 'status');
+      label.setAttribute('aria-atomic', 'true');
+      status.appendChild(label);
+      wrap.appendChild(status);
+    }
     status.className = 'source-state ' + state;
-    status.textContent = `${sources.find(s => s.id === id)?.label || id} · ${text}`;
-    wrap.appendChild(status);
+    const label = status.firstElementChild;
+    const message = `${sources.find(s => s.id === id)?.label || id} · ${text}`;
+    if (label.textContent !== message) label.textContent = message;
+    let retry = status.querySelector('button');
+    const retrying = sourceRetries.has(id);
+    if (['error', 'warning'].includes(state) || retrying) {
+      if (!retry) {
+        retry = document.createElement('button');
+        retry.type = 'button';
+        retry.onclick = () => retrySource(id);
+        status.appendChild(retry);
+      }
+      retry.textContent = retrying ? '重试中…' : '重试';
+      retry.setAttribute('aria-label', `重试 ${sources.find(s => s.id === id)?.label || id}`);
+      // Keep focus during streaming updates; retrySource guards repeated actions.
+      retry.setAttribute('aria-disabled', String(retrying));
+    } else if (retry) {
+      if (document.activeElement === retry) status.focus();
+      retry.remove();
+    }
   });
   wrap.hidden = sourceStates.size === 0;
 }
@@ -381,6 +572,7 @@ function updateSelection() {
   $('#selectAll').checked = queue.length > 0 && count === queue.length;
   $('#selectAll').indeterminate = count > 0 && count < queue.length;
   $('#downloadSelected').disabled = !count || batchDownloading;
+  $('#favoriteSelected').disabled = !count;
   $('#downloadSelected').textContent = batchDownloading ? '正在添加…' : '下载所选';
 }
 
@@ -578,6 +770,7 @@ async function play(token, playQueue = null, refresh = false) {
 }
 
 function showNowPlaying(token, t) {
+  updateFavoriteCurrent();
   $('#player').dataset.empty = 'false';
   $('#npTitle').textContent = t.song_name;
   $('#npArtist').textContent = t.singers;
@@ -885,6 +1078,7 @@ function syncLyric(c) {
   }
 }
 function setPanel(name) {
+  let focusTarget = null;
   [['lyricsPanel', 'lyricsToggle', 'lyricsClose'], ['dlDrawer', 'downloadsButton', 'dlClose'], ['queuePanel', 'queueToggle', 'queueClose'], ['cachePanel', 'cacheManage', 'cacheClose']].forEach(([id, trigger, close]) => {
     const open = name === id;
     const panel = $('#' + id);
@@ -893,10 +1087,20 @@ function setPanel(name) {
     panel.inert = !open;
     $('#' + trigger).classList.toggle('on', open);
     $('#' + trigger).setAttribute('aria-expanded', String(open));
-    if (restoreFocus) $('#' + trigger).focus();
-    if (open) $('#' + close).focus();
+    if (restoreFocus && !name) focusTarget = $('#' + trigger);
+    if (open) focusTarget = $('#' + close);
   });
+  focusTarget?.focus();
 }
+function handlePanelFocus(event) {
+  if (event.target.closest('dialog, #player')) return;
+  const panel = document.querySelector('.lyrics-panel.open, .dl-drawer.open, .queue-panel.open, .cache-panel.open');
+  if (!panel || panel.contains(event.target) || event.target.getAttribute('aria-controls') === panel.id) return;
+  // These drawers are non-modal. Tabbing back into the workspace reveals it
+  // instead of leaving keyboard focus behind an opaque drawer on a phone.
+  setPanel(null);
+}
+document.addEventListener('focusin', handlePanelFocus);
 $('#lyricsToggle').onclick = () => setPanel($('#lyricsPanel').classList.contains('open') ? null : 'lyricsPanel');
 $('#lyricsClose').onclick = () => setPanel(null);
 
@@ -1019,7 +1223,7 @@ function renderLibrary() {
         <div class="library-format">${esc(t.ext.toUpperCase())}<small>${mb(t.file_size_bytes)}</small></div>
         <button class="library-play" type="button" aria-label="播放 ${esc(t.song_name)}">${ICON_PLAY}</button>
         <button class="library-reveal" type="button" aria-label="在文件夹中显示 ${esc(t.song_name)}" ${desktopReady ? '' : 'hidden'}>${ICON_FOLDER}</button>
-        <button class="library-delete" type="button" aria-label="删除本地文件 ${esc(t.song_name)}">${ICON_TRASH}</button>
+        <button class="library-delete" type="button" title="移至废纸篓" aria-label="移至废纸篓 ${esc(t.song_name)}">${ICON_TRASH}</button>
         <div class="library-actions"><button class="library-export" type="button" aria-label="导出 MP3 ${esc(t.song_name)}" ${t.ext === 'mp3' ? 'hidden' : ''}>导出 MP3</button><a href="${esc(t.stream_url)}?download=1" aria-label="保存到设备 ${esc(t.song_name)}" download>保存到设备</a></div>`;
       li.querySelector('.library-play').onclick = () => play(t.token, playQueue);
       li.querySelector('.library-export').onclick = e => exportLocalMp3(t, e.currentTarget);
@@ -1032,22 +1236,23 @@ function renderLibrary() {
         }
       };
       li.querySelector('.library-delete').onclick = async (e) => {
-        if (!confirm(`删除“${t.song_name}”及其本地文件？`)) return;
         const button = e.currentTarget;
+        if (!await confirmMusicTrash(t.song_name)) return;
         button.disabled = true;
         try {
           const playing = tracks.get(currentToken);
           if (playing?.local && playing.relative === t.relative) clearLocalPlayback();
-          const response = await fetch(t.delete_url, { method: 'DELETE' });
-          if (!response.ok) throw new Error();
+          const response = await fetch(t.delete_url, { method: 'DELETE', headers: { 'If-Match': t.restore_key } });
+          const result = response.status === 204 ? {} : await response.json();
+          if (!response.ok) throw new Error(result.error || '无法移至废纸篓，文件已保留');
           reconcileLocalQueue([...tracks.values()].filter(item => item.local && item.relative !== t.relative));
           libraryQueue = libraryQueue.filter(token => tracks.has(token));
           renderQueue();
           await loadLibrary();
-          toast('已删除：' + t.song_name);
-        } catch {
+          toast(result.warning || '已移至废纸篓：' + t.song_name);
+        } catch (error) {
           button.disabled = false;
-          toast('删除失败');
+          toast(error.message || '无法移至废纸篓');
         }
       };
       li.ondblclick = (e) => { if (!e.target.closest('button, a')) play(t.token, playQueue); };
@@ -1077,6 +1282,7 @@ function clearLocalPlayback() {
   audio.removeAttribute('src');
   audio.load();
   currentToken = null;
+  updateFavoriteCurrent();
   $('#player').dataset.empty = 'true';
   $('#npTitle').textContent = '未在播放';
   $('#npArtist').textContent = '选择一首歌开始';
@@ -1306,7 +1512,9 @@ async function refreshDownloadMarkers(requestId) {
       const text = item.status === 'existing' ? `已下载 ${format.toUpperCase()}` : item.status === 'active' ? '下载中' : item.local_source ? '本地可导出' : '';
       row.querySelector('.download-state').textContent = text;
       row.querySelector('.a-dl').title = text || (formatPreference.value === 'ask' ? '选择下载格式' : `下载 ${format.toUpperCase()}`);
-      row.querySelector('.a-dl').setAttribute('aria-label', `${text || `下载 ${format.toUpperCase()}`} ${item.song_name}`);
+      const songName = tracks.get(row.dataset.token)?.song_name || item.song_name || '歌曲';
+      const action = formatPreference.value === 'ask' ? '选择下载格式' : `下载 ${format.toUpperCase()}`;
+      row.querySelector('.a-dl').setAttribute('aria-label', `${action} ${songName}${text ? `，${text}` : ''}`);
     });
   } catch {} // Preflight on click remains authoritative if background status fails.
 }
@@ -1434,8 +1642,8 @@ function addDlItem(t) {
     </div>
     <div class="dl-bar"><i></i></div>
     <div class="dl-stat"><span class="prog">准备中…</span><span class="s"></span></div>
-    <p class="dl-error" hidden></p>
-    <div class="dl-actions"><button class="dl-retry" type="button" hidden>重试</button><button class="dl-open" type="button" hidden>${desktopReady ? '显示文件' : '保存到设备'}</button></div>`;
+    <p class="dl-error" role="status" aria-atomic="true" hidden></p>
+    <div class="dl-actions"><button class="dl-retry" type="button" hidden>重试</button><button class="dl-find" type="button" hidden>重新查找</button><button class="dl-open" type="button" hidden>${desktopReady ? '显示文件' : '保存到设备'}</button></div>`;
   list.prepend(li);
   dlCount++; fab.classList.add('has'); fab.querySelector('.badge').textContent = dlCount;
   return li;
@@ -1449,7 +1657,7 @@ function removeDlItem(item) {
 }
 
 function unfinishedDownloadCount() {
-  return [...downloadTasks.values()].filter(task => !['done', 'error', 'cancelled'].includes(task.status)).length;
+  return [...downloadTasks.values()].filter(task => !['done', 'error', 'cancelled', 'interrupted'].includes(task.status)).length;
 }
 
 function handleBeforeUnload(event) {
@@ -1468,8 +1676,8 @@ function updateLeaveWarning() {
   }
   const prefix = count ? `还有 ${count} 项下载或转换未完成。` : pendingDownloadRequests ? '正在提交任务，请等待确认。' : '';
   const message = prefix + (desktopReady
-    ? '退出声轨会中断未完成任务，重新打开后需要重新添加。已完成文件会保留；可最小化窗口继续等待。'
-    : '关闭此页面不会停止已提交的任务，但请保持后台程序运行。停止后台后，未完成任务需要重新添加。');
+    ? '退出声轨会中断未完成任务，重新打开后保留记录，需手动重新操作。已完成文件会保留；可最小化窗口继续等待。'
+    : '关闭此页面不会停止已提交的任务，但请保持后台程序运行。停止后台后保留未完成记录，需手动重新操作。');
   const notice = $('#downloadExitNotice');
   if (notice.textContent !== message) notice.textContent = message;
   notice.dataset.active = String(active);
@@ -1480,7 +1688,7 @@ function refreshTaskCounts() {
   dlCount = [...downloadTasks.values()].filter(task => !['done', 'cancelled'].includes(task.status)).length;
   fab.querySelector('.badge').textContent = dlCount;
   fab.classList.toggle('has', dlCount > 0);
-  $('#retryFailed').disabled = ![...downloadTasks.values()].some(task => task.status === 'error');
+  $('#retryFailed').disabled = ![...downloadTasks.values()].some(task => task.status === 'error' && !task.record?.restored);
   for (const [id, message] of [['#dlList', '暂无下载任务'], ['#recentList', '完成后可在这里找到文件']]) {
     if (!$(id).querySelector('.dl-item')) $(id).innerHTML = `<li class="dl-empty">${message}</li>`;
   }
@@ -1488,7 +1696,7 @@ function refreshTaskCounts() {
 
 async function retryDownloadTask(id) {
   const task = downloadTasks.get(id);
-  if (!task || task.status !== 'error') return false;
+  if (!task || task.status !== 'error' || task.record?.restored) return false;
   const button = task.item.querySelector('.dl-retry');
   if (button.disabled) return false;
   button.disabled = true;
@@ -1516,18 +1724,20 @@ async function retryDownloadTask(id) {
 }
 
 $('#retryFailed').onclick = async () => {
-  const ids = [...downloadTasks].filter(([, task]) => task.status === 'error').map(([id]) => id);
+  const ids = [...downloadTasks].filter(([, task]) => task.status === 'error' && !task.record?.restored).map(([id]) => id);
   let started = 0;
   for (const id of ids) if (await retryDownloadTask(id)) started++;
   toast(`已重新添加 ${started} / ${ids.length} 项失败任务`);
 };
 
 async function restoreDownloads() {
-  const terminal = new Map([...downloadTasks].filter(([, task]) => ['done', 'error'].includes(task.status)));
+  const terminal = new Map([...downloadTasks].filter(([, task]) => ['done', 'error', 'interrupted'].includes(task.status)));
   try {
     const response = await fetch('/api/downloads');
     if (!response.ok) throw new Error();
     const data = await response.json();
+    $('#downloadHistoryNotice').hidden = !data.history_warning;
+    $('#downloadHistoryNotice').textContent = data.history_warning || '';
     const present = new Set(data.tasks.map(record => record.download_id));
     for (const [id, task] of terminal) {
       if (!present.has(id) && downloadTasks.get(id) === task) removeDlItem(task.item);
@@ -1551,14 +1761,14 @@ async function restoreDownloads() {
 
 function trackDownload(id, item, btn, release = () => {}, initial = null) {
   let restoring = Boolean(initial);
-  const es = initial && ['done', 'error', 'cancelled'].includes(initial.status)
+  const es = initial && ['done', 'error', 'cancelled', 'interrupted'].includes(initial.status)
     ? { close() {} } : new EventSource(`/api/download/${id}/progress`);
   item.dataset.downloadId = id;
   const task = { item, status: initial?.status || 'queued', record: initial || {} };
   downloadTasks.set(id, task);
   item.querySelector('.dl-retry').onclick = () => retryDownloadTask(id);
   item.querySelector('.dl-delete').onclick = async (e) => {
-    if (task.status !== 'done' && !confirm('移除这个任务？未完成的下载会取消并清理临时文件。')) return;
+    if (!['done', 'error', 'interrupted'].includes(task.status) && !confirm('取消这个任务？未完成的下载会停止并清理临时文件。')) return;
     const button = e.currentTarget;
     button.disabled = true;
     try {
@@ -1572,7 +1782,7 @@ function trackDownload(id, item, btn, release = () => {}, initial = null) {
       release();
       removeDlItem(item);
       if (btn) btn.classList.remove('busy');
-      toast('下载任务已删除');
+      toast('任务记录已移除，已完成音乐文件保留');
     } catch {
       button.disabled = false;
       toast('删除失败');
@@ -1587,12 +1797,28 @@ function trackDownload(id, item, btn, release = () => {}, initial = null) {
     const bar = item.querySelector('.dl-bar i');
     const prog = item.querySelector('.prog');
     const s = item.querySelector('.s');
-    if (d.status === 'error') {
-      item.classList.add('error'); prog.textContent = '失败';
+    const remove = item.querySelector('.dl-delete');
+    const removeLabel = ['done', 'error', 'interrupted'].includes(d.status) ? '移除记录，保留音乐文件' : '取消任务';
+    remove.setAttribute('aria-label', removeLabel); remove.title = removeLabel;
+    const find = item.querySelector('.dl-find');
+    find.hidden = !d.restored;
+    find.textContent = d.local ? '查看本地音乐' : '重新查找';
+    find.onclick = () => {
+      setPanel(null);
+      if (d.local) { setView('library'); loadLibrary(); }
+      else {
+        $('#searchInput').value = [d.song_name || d.name, d.singers].filter(Boolean).join(' ');
+        runSearch(sources.some(source => source.id === d.source_id) ? [d.source_id] : null);
+      }
+    };
+    if (d.status === 'error' || d.status === 'interrupted') {
+      item.querySelector('.dl-bar').hidden = Boolean(d.restored);
+      item.classList.add('error'); prog.textContent = d.restored ? (d.status === 'error' ? '上次失败' : '已中断') : '失败';
       s.textContent = '';
       item.querySelector('.dl-error').hidden = false;
-      item.querySelector('.dl-error').textContent = d.message || '下载失败，请重试';
-      item.querySelector('.dl-retry').hidden = false;
+      const errorText = `${d.song_name || d.name || '歌曲'}：${d.message || '下载失败，请重试'}`;
+      if (item.querySelector('.dl-error').textContent !== errorText) item.querySelector('.dl-error').textContent = errorText;
+      item.querySelector('.dl-retry').hidden = Boolean(d.restored);
       item.querySelector('.dl-delete').disabled = false;
       es.close(); release(); if (btn) btn.classList.remove('busy'); return;
     }
@@ -1686,7 +1912,7 @@ function handleShortcuts(e) {
     step(e.code === 'ArrowRight' ? 1 : -1);
     return;
   }
-  if (e.target.closest('button, [role="slider"]')) return;
+  if (e.target.closest('button, a, summary, [role="slider"]')) return;
   if (e.code === 'Space') { e.preventDefault(); $('#playBtn').click(); }
 }
 document.addEventListener('keydown', handleShortcuts);

@@ -20,7 +20,7 @@ setup(
     options={
         'py2app': {
             'argv_emulation': False,
-            'packages': ['fake_useragent', 'flask', 'musicdl', 'requests', 'webview'],
+            'packages': ['fake_useragent', 'flask', 'musicdl', 'requests', 'webview', 'send2trash'],
             'plist': {
                 'CFBundleDisplayName': '声轨',
                 'CFBundleIdentifier': 'com.musicdl.soundtrack',

@@ -69,7 +69,7 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`; keep its supporti
 - "播放全部" creates an independent playback queue from the current results. New searches do not clear it; each row also offers a play-next action that inserts or moves the track.
 - The player supports shuffle, sequential play, repeat-all, and repeat-one. Repeat-one applies at the natural end of a song; manual next/previous still changes tracks.
 - The bottom-right queue button lets you inspect, play, remove, or clear upcoming tracks while retaining the current song; "清空全部并停止" clears everything and stops playback. The first 200 tracks, current selection, shuffle order, and repeat mode persist. Reopening restores a paused queue, without restoring playback position.
-- The download panel shows unfinished task counts and explains what happens on exit. Desktop confirms closing while requests are being submitted or tasks are queued, downloading, converting, or cancelling. Cancel keeps the app running; completed or failed records alone do not block closing. Unfinished tasks must be added again after exit; completed files remain.
+- The download panel shows unfinished task counts and explains what happens on exit. Desktop confirms closing while requests are being submitted or tasks are queued, downloading, converting, or cancelling. Cancel keeps the app running; completed, failed, or interrupted records alone do not block closing. Recent unfinished records survive exit for manual recovery; completed files remain.
 - Browser close/reload requests a leave warning only for unfinished tasks known to this page or pending submissions. The browser controls the text and whether it appears; some mobile browsers may suppress it. Submitted tasks continue while the backend runs. Stopping or force-killing the backend interrupts them; forced system termination cannot be intercepted, and restart/resume is unsupported. Desktop uses native confirmation without a duplicate browser prompt.
 - Restored remote tracks fetch fresh links when played, matching the exact provider and track/quality identity. If that version cannot be confirmed, retry or search again; a same-title recording is never substituted automatically. Broken streams get at most one automatic refresh. Local tracks are checked against their directory, relative path, size, and modification time; changed or missing files must be selected again.
 - Only track metadata and preferences are stored, without playback URLs, temporary tokens, or lyrics. Browser records belong to the same origin, including its port; clearing site data removes them, and the last interaction wins across tabs. Desktop uses a dedicated persistent browser directory and local port `42001`, allowing one instance; an occupied port aborts startup instead of opening another service. Old private sessions cannot be migrated. Unavailable storage does not prevent current-session use.
@@ -88,10 +88,16 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`; keep its supporti
 - Filtering does not change the active playback queue. Clicking a track or "播放筛选结果" creates a queue from the visible list. Switching between search and local music preserves each view. Failed reads offer retry; changing folders invalidates old file actions before loading the new folder to prevent operations on a different same-name file.
 - The library shows actual formats and offers "导出 MP3" for non-MP3 files, preserving the original and supporting cancellation. Search results matching a saved FLAC recording can also export MP3 locally without downloading it again.
 - Recent completions retain a file action: reveal on desktop or save to the device in a browser. Removing a completed task record keeps its audio file. Failed tasks show the full error and offer individual retry or "重试失败项" (retry failed tasks).
-- Reloading the page or reopening the drawer restores tasks from the current backend process and syncs retries/removals from other pages. The snapshot includes all active tasks and the latest 100 completed/failed records. Task records do not survive app exit; saved audio remains in the library.
+- Failed or partially failed sources offer an individual Retry using the original search query. Other results, selections, and playback remain intact; repeated results with the same provider and track identity are not added twice.
+- Reloading the page or reopening the drawer restores tasks from the current backend process and syncs retries/removals from other pages. The snapshot includes all active tasks and the latest 100 terminal records. The latest 100 unfinished/failed records survive app exit as Interrupted or Previously failed, with actions to search again or return to Local music. Downloads never restart automatically and byte-range resume is unsupported.
+- Persisted receipts contain necessary metadata such as title, artist, source, format, and status, without media URLs, temporary tokens, credentials, raw errors, or file paths. Desktop uses `downloads.json` in its settings directory; source runs use `.runtime-home/state/downloads.json`, configurable with `SOUNDTRACK_STATE_DIR`. Corrupt history is preserved with a warning; current downloads still work.
+- Deleting local music asks for confirmation and moves it to the system Trash / Recycle Bin for recovery. In browser mode this acts on the backend computer. Owned artwork and metadata move with the audio; lyrics shared by other formats remain. Failure preserves files without falling back to permanent deletion; partial sidecar failures are reported. Active download/conversion files cannot be moved, and changed files or folders require refreshing the list.
+- The download panel distinguishes cancelling active tasks (stopping work and cleaning temporary files) from removing terminal records (keeping completed music). Move actual music files from Local music.
 - New downloads create a matching `.lrc` and try to embed title, artist, album, lyrics, and artwork into MP3, FLAC, M4A, and OGG files; internal `.soundtrack.json` and `.soundtrack.cover.jpg/.png/...` files remain only as app index/fallback data.
 - Shortcuts: `Space` to play/pause, `Alt+←/→` for previous/next track.
 - `Esc` closes drawers. Focus the seek or volume slider and use arrow keys to adjust it, or `Home/End` to reach either end. Phones retain seeking and cache settings.
+- Press `Tab` from the start of the page to reveal shortcuts to the track list or player. Links and disclosure summaries have visible focus; Space opens summaries such as recent searches without triggering playback. Tabbing back into the workspace dismisses an overlapping drawer; the player remains usable.
+- Source retries retain keyboard focus and move it to the source status on completion. Source results and failures with track names expose live status semantics. Mobile track selection and row action targets are at least 40×40px. Browser semantics and keyboard paths have been checked; actual VoiceOver / NVDA speech remains unverified.
 
 ![Independent playback queue with track removal and a clear-upcoming action](docs/interface-queue.webp)
 
@@ -103,13 +109,21 @@ The executable is created at `dist\Soundtrack\Soundtrack.exe`; keep its supporti
 
 [Mobile local library screenshot](docs/library-mobile.png)
 
-You can keep listening to the current queue while searching for other music. Favorites and playlist-link import are not yet available.
+You can keep listening to the current queue while searching for other music.
+
+### Favorites (next release)
+
+Select search results and choose "收藏所选", or click ☆ in the player to save the current track, including local music. ★ indicates a saved favorite. "我的收藏" supports title/artist/album filtering, playing the filtered list, searching again, and removal. Removing a favorite does not delete files or change the active queue.
+
+Up to 200 favorites are stored in the current browser origin or desktop browser profile, without cross-device sync. Clearing browser data removes them; simultaneous edits in multiple tabs use the last write. Deduplication uses provider plus track/quality identity, or relative path plus file version for local music. Tracks without reliable identity cannot be saved. Only necessary metadata is retained, never temporary URLs, tokens, or credentials. Storage failures are reported without overwriting saved data; corrupt records are preserved.
+
+Favorites do not download audio or guarantee offline playback. After restart, playback resolves the exact recording from the same provider; use "重新查找" if unavailable. Local files are validated before each play; moved/replaced files or changed download folders require selecting and saving the file again from local music. Playlist-link import is not available yet.
 
 ## UI verification
 
 ```bash
-node --test test_ui.cjs
-python -m unittest -v test_app.py test_audio_formats.py test_download_workflow.py
+node --test test_ui.cjs test_session.cjs test_favorites.cjs
+python -m unittest -v test_app.py test_audio_formats.py test_download_workflow.py test_task_recovery.py
 ```
 
 Frontend regression tests need no extra Node.js packages and cover queue isolation, repeat/shuffle, batch preflight, duplicate confirmation, retries, task restoration, library filtering/sorting and failed folder changes, stale responses, drawers, and keyboard controls. Backend tests cover display cleanup, identity across searches, concurrent deduplication, path validation, file preservation, and real local exports using isolated directories and generated audio. Live music providers still require manual online verification.
@@ -122,6 +136,7 @@ static/index.html  UI markup
 static/style.css   Visual styling (Apple Music-inspired light workspace)
 static/app.js      Frontend logic: streaming search / queue / Web Audio / lyrics / batch downloads
 static/session.js  History and queue validation / persistence / exact-identity resolution
+static/favorites.js Favorites metadata validation / deduplication and limits / local persistence
 docs/             Pages showcase and screenshots; no hosted search or download service
 ```
 
@@ -145,7 +160,7 @@ For development checks, `SOUNDTRACK_SETTINGS_DIR` selects an isolated desktop se
 
 Maintainers can follow the [GitHub web release guide (Chinese)](docs/releasing.md) to create a version, check automated packaging and retry failed builds.
 
-Soundtrack plays and downloads direct audio URLs resolved by musicdl through its own HTTP flow, not the source-specific musicdl `_download` flow. It supports local MP3 conversion but does not implement media decryption, HLS merging, download-task recovery after a restart, or resumable downloads. Apple Music, Deezer, Joox, Qianqian, Qobuz, SoundCloud, StreetVoice, Soda Music, and TIDAL are not integrated. The Apple Music-inspired appearance does not imply access to the Apple Music service.
+Soundtrack plays and downloads direct audio URLs resolved by musicdl through its own HTTP flow, not the source-specific musicdl `_download` flow. It supports local MP3 conversion and task receipts across restarts, but does not implement media decryption, HLS merging, automatic download recovery, or resumable downloads. Apple Music, Deezer, Joox, Qianqian, Qobuz, SoundCloud, StreetVoice, Soda Music, and TIDAL are not integrated. The Apple Music-inspired appearance does not imply access to the Apple Music service.
 
 ## Credits
 

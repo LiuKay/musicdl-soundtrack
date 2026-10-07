@@ -25,7 +25,7 @@ SETTINGS_DIR = Path(os.environ.get('SOUNDTRACK_SETTINGS_DIR', SETTINGS_DIR)).exp
 SETTINGS_PATH = SETTINGS_DIR / 'settings.json'
 QUIT_DOWNLOAD_MESSAGE = (
     '仍有正在提交或未完成的下载、转换任务（包括排队和取消中的任务）。\n\n'
-    '退出声轨会中断这些任务，重新打开后不会自动恢复，需要重新添加。'
+    '退出声轨会中断这些任务，重新打开后保留中断记录，但不会自动恢复，需要手动重新操作。'
     '已完成的音乐文件会保留。\n\n'
     '要继续等待，请选择“取消”；确认退出请选择“确定”或“退出声轨”。'
 )
@@ -133,6 +133,7 @@ def main():
     # A stable origin keeps browser preferences across launches. Bind before
     # opening the window: an occupied port must not open another local app.
     server = make_server('127.0.0.1', 42001, app_module.app, threaded=True)
+    app_module.initialize_download_history(SETTINGS_DIR / 'downloads.json')
     threading.Thread(target=server.serve_forever, daemon=True).start()
     window = webview.create_window(
         '声轨 · Soundtrack',

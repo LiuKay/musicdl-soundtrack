@@ -100,12 +100,14 @@ class SearchCompatibilityTest(unittest.TestCase):
 
     def test_desktop_uses_persistent_origin_and_shuts_down_server(self):
         with mock.patch.object(desktop, 'make_server') as make_server, \
+                mock.patch.object(app, 'initialize_download_history') as history, \
                 mock.patch.object(desktop.threading, 'Thread'), \
                 mock.patch.object(desktop.webview, 'create_window') as create_window, \
                 mock.patch.object(desktop.webview, 'start') as start, \
                 mock.patch.dict(os.environ, {}, clear=False):
             closing = create_window.return_value.events.closing
             desktop.main()
+            history.assert_called_once_with(desktop.SETTINGS_DIR / 'downloads.json')
             make_server.assert_called_once_with('127.0.0.1', 42001, app.app, threaded=True)
             self.assertEqual(create_window.call_args.args[1], 'http://127.0.0.1:42001')
             self.assertTrue(create_window.call_args.kwargs['confirm_close'])
@@ -806,9 +808,10 @@ class SearchCompatibilityTest(unittest.TestCase):
                 escaped = app.api_library_file('../outside.mp3')
                 escaped_delete = app.api_delete_library_file('../outside.mp3')
 
-            with mock.patch.object(app.os, 'remove', side_effect=PermissionError):
+            with mock.patch.object(app, 'send2trash', side_effect=PermissionError):
                 failed_delete = client.delete(library['tracks'][0]['delete_url'])
-            deleted = client.delete(library['tracks'][0]['delete_url'])
+            with mock.patch.object(app, 'send2trash', side_effect=lambda path: Path(path).unlink()):
+                deleted = client.delete(library['tracks'][0]['delete_url'])
             deleted_files = [
                 audio, Path(str(audio) + '.soundtrack.json'),
                 Path(str(audio) + '.soundtrack.cover'), audio.with_suffix('.lrc'),

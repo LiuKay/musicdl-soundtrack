@@ -167,7 +167,7 @@ test('leave warning covers every active stage but not completed, failed or cance
     assert.match(notice.textContent, /还有 1 项/);
     assert.match(notice.textContent, /保持后台程序运行/);
   }
-  for (const status of ['done', 'error', 'cancelled']) {
+  for (const status of ['done', 'error', 'cancelled', 'interrupted']) {
     context.downloadTasks.set('job', { status }); context.updateLeaveWarning();
     assert.equal(listeners.has('beforeunload'), false);
     assert.equal(notice.dataset.active, 'false');
@@ -297,6 +297,81 @@ test('drawer close restores focus to its trigger', () => {
   assert.equal(focused, 'lyricsToggle');
 });
 
+test('switching drawers focuses only the new drawer after all visibility changes', () => {
+  const ids = ['lyricsPanel', 'lyricsToggle', 'lyricsClose', 'dlDrawer', 'downloadsButton', 'dlClose', 'queuePanel', 'queueToggle', 'queueClose', 'cachePanel', 'cacheManage', 'cacheClose'];
+  const nodes = Object.fromEntries(ids.map(id => ['#' + id, element()]));
+  const focused = [];
+  const document = { activeElement: nodes['#lyricsClose'] };
+  nodes['#lyricsPanel'].contains = node => node === nodes['#lyricsClose'];
+  for (const id of ids) nodes['#' + id].focus = () => { focused.push(id); document.activeElement = nodes['#' + id]; };
+  helper('setPanel', { $: id => nodes[id], document })('dlDrawer');
+  assert.deepEqual(focused, ['dlClose']);
+  assert.equal(nodes['#lyricsPanel'].inert, true);
+});
+
+test('Space preserves native summary and link behavior without toggling playback', () => {
+  const shortcuts = helper('handleShortcuts', { $: () => ({ click() { assert.fail('not a playback shortcut'); } }) });
+  for (const tag of ['summary', 'a']) shortcuts({ code: 'Space', preventDefault() { assert.fail('keep native key action'); },
+    target: { closest: selector => selector.split(',').map(value => value.trim()).includes(tag) } });
+});
+
+test('focus returning to the workspace dismisses an overlapping non-modal drawer', () => {
+  const closed = [];
+  const panel = { id: 'dlDrawer', contains: target => target.inside };
+  const focus = helper('handlePanelFocus', { document: { querySelector: () => panel }, setPanel: name => closed.push(name) });
+  const target = extra => ({ closest: () => null, getAttribute: () => null, ...extra });
+  focus({ target: target({ inside: true }) });
+  focus({ target: target({ getAttribute: () => 'dlDrawer' }) });
+  focus({ target: target({ closest: () => ({}) }) }); // Player or native dialog.
+  assert.equal(closed.length, 0);
+  focus({ target: target({}) });
+  assert.deepEqual(closed, [null]);
+});
+
+test('source status updates keep the retry button focused and move focus predictably on completion', () => {
+  const document = { activeElement: null };
+  const node = tag => {
+    const value = { ...element(), tag, children: [], parent: null,
+      replaceChildren() { this.children = []; },
+      appendChild(child) { this.children.push(child); child.parent = this; },
+      querySelector(tag) { return this.children.find(child => child.tag === tag) || null; },
+      remove() { this.parent.children = this.parent.children.filter(child => child !== this); },
+      focus() { document.activeElement = this; }
+    };
+    Object.defineProperty(value, 'firstElementChild', { get() { return this.children[0]; } });
+    return value;
+  };
+  document.createElement = node;
+  const wrap = node('div'), states = new Map([['A', { state: 'error', text: '失败' }]]), retries = new Map();
+  const render = helper('renderSourceStates', { $: () => wrap, document, sourceStates: states, sourceRetries: retries,
+    sources: [{ id: 'A', label: '来源 A' }], retrySource() {} });
+  render();
+  const status = wrap.children[0], button = status.querySelector('button');
+  button.focus(); retries.set('A', {}); states.set('A', { state: 'busy', text: '重试中' }); render();
+  assert.equal(wrap.children[0], status, 'streaming updates must retain the existing source node');
+  assert.equal(document.activeElement, button);
+  assert.equal(status.querySelector('button'), button);
+  assert.equal(button.getAttribute('aria-disabled'), 'true');
+  states.set('B', { state: 'done', text: '完成' }); render();
+  assert.equal(document.activeElement, button, 'another source must not steal focus');
+  retries.delete('A'); states.set('A', { state: 'done', text: '完成' }); render();
+  assert.equal(document.activeElement, status);
+  assert.equal(status.querySelector('button'), null);
+  assert.equal(status.firstElementChild.getAttribute('role'), 'status');
+});
+
+test('download labels keep the song name when preflight only returns an error', async () => {
+  const marker = element(), button = element();
+  const row = { dataset: { token: 'expired' }, querySelector: selector => selector === '.a-dl' ? button : marker };
+  const refresh = helper('refreshDownloadMarkers', { queue: ['expired'], markerRequestId: 1,
+    tracks: new Map([['expired', { song_name: '夜空（Live）' }]]), formatPreference: { value: 'ask' },
+    document: { querySelectorAll: () => [row] },
+    fetch: async () => ({ ok: true, json: async () => ({ items: [{ token: 'expired', status: 'unavailable' }] }) })
+  });
+  await refresh(1);
+  assert.equal(button.getAttribute('aria-label'), '选择下载格式 夜空（Live）');
+});
+
 test('sliders support keyboard steps and clamp at the endpoints', () => {
   const slider = element();
   let value;
@@ -364,10 +439,129 @@ test('searching again preserves tracks referenced by the current playback queue'
     $, tracks, queue: ['old-a', 'old-b'], activeQueue: ['old-a', 'old-b'], currentToken: 'old-a', searchES: null,
     activeSources: () => ['MiguMusicClient'], setStatus() {}, setView() {}, rememberSearch() {},
     EventSource: function() { this.addEventListener = () => {}; },
-    selectedTokens: new Set(), sourceStates: new Map(),
+    selectedTokens: new Set(), sourceStates: new Map(), sourceRetries: new Map(), searchQuery: '',
     pruneTracks() {}, updateSelection() {}, setSourceState() {}, renderSourceStates() {}
   })();
   assert.equal(tracks.has('old-b'), true, 'the next song must remain playable');
+});
+
+function searchRetryContext() {
+  const streams = [], nodes = new Map();
+  const context = vm.createContext({
+    searchES: null, sourceRetries: new Map(), searchQuery: 'original query',
+    queue: ['kept'], tracks: new Map([['kept', { token: 'kept', source_id: 'A', identity: 'one' }]]),
+    selectedTokens: new Set(['kept']), activeQueue: ['kept'], sources: [{ id: 'A' }, { id: 'B' }],
+    sourceStates: new Map([['A', { state: 'warning' }], ['B', { state: 'error' }]]),
+    $: id => { if (!nodes.has(id)) nodes.set(id, { ...element(), value: 'edited input' }); return nodes.get(id); },
+    EventSource: function(url) {
+      this.url = url; this.listeners = {}; this.closed = false;
+      this.addEventListener = (name, fn) => { this.listeners[name] = fn; };
+      this.close = () => { this.closed = true; };
+      this.emit = (name, data = {}) => this.listeners[name]?.({ data: JSON.stringify(data) });
+      streams.push(this);
+    },
+    setSourceState(id, state, text) { context.sourceStates.set(id, { state, text }); },
+    setStatus() {}, renderSourceStates() {}, scheduleDownloadMarkers() {}, addRow() {},
+    updateSelection() {}, showSpotlight() {}, showSearchMessage() {}, sourceErrorMessage: () => 'failed',
+    rememberSearch() {}, setView() {}, pruneTracks() {}, activeSources: () => ['A', 'B']
+  });
+  for (const name of ['runSearch', 'retrySource']) vm.runInContext(source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))[0], context);
+  return { context, streams, nodes };
+}
+
+test('source retry uses the original query and preserves selection and playback while deduplicating', () => {
+  const { context, streams } = searchRetryContext();
+  context.retrySource('A'); context.retrySource('A');
+  assert.equal(streams.length, 1);
+  assert.match(streams[0].url, /q=original%20query&sources=A/);
+  streams[0].emit('result', { token: 'duplicate', source_id: 'A', identity: 'one' });
+  streams[0].emit('result', { token: 'new', source_id: 'A', identity: 'two' });
+  assert.deepEqual([...context.queue], ['kept', 'new']);
+  assert.deepEqual([...context.selectedTokens], ['kept']);
+  assert.deepEqual([...context.activeQueue], ['kept']);
+  streams[0].emit('source_done', { source: 'A', count: 2 }); streams[0].emit('done');
+  assert.equal(context.sourceStates.get('A').state, 'done');
+  assert.equal(context.sourceStates.get('B').state, 'error');
+  assert.equal(context.sourceRetries.size, 0);
+});
+
+test('parallel retries remain independent and a new search invalidates all old events', () => {
+  const { context, streams } = searchRetryContext();
+  context.retrySource('A'); context.retrySource('B');
+  streams[0].onerror();
+  assert.equal(context.sourceStates.get('A').state, 'error');
+  assert.equal(context.sourceStates.get('B').state, 'busy');
+  context.runSearch();
+  assert.equal(streams[1].closed, true);
+  streams[1].emit('result', { token: 'late', source_id: 'B', identity: 'late' });
+  streams[1].emit('source_done', { source: 'B' });
+  assert.equal(context.queue.length, 0);
+  assert.equal(context.sourceStates.get('B').state, 'busy');
+  assert.equal(context.searchQuery, 'edited input');
+});
+
+test('main search completion counts results added by source retry before other sources finish', () => {
+  const { context, streams } = searchRetryContext();
+  const statuses = [];
+  context.setStatus = (busy, text) => statuses.push([busy, text]);
+  context.runSearch();
+  streams[0].emit('source_error', { source: 'A' }); context.retrySource('A');
+  streams[1].emit('result', { token: 'retried', source_id: 'A', identity: 'new' });
+  streams[0].emit('done');
+  assert.deepEqual(statuses.at(-1), [true, '共 1 首']);
+  streams[1].emit('source_done', { source: 'A', count: 1 }); streams[1].emit('done');
+  assert.deepEqual(statuses.at(-1), [false, '共 1 首']);
+});
+
+test('music trash dialog resets consent and accepts only the explicit Trash action', async () => {
+  const dialog = element(), title = element();
+  dialog.showModal = () => { dialog.open = true; };
+  const confirm = helper('confirmMusicTrash', { $: id => id === '#musicTrashDialog' ? dialog : title });
+  for (const choice of ['', 'cancel', 'trash']) {
+    dialog.returnValue = 'trash';
+    const answer = confirm('<song>');
+    assert.equal(dialog.returnValue, '');
+    assert.match(title.textContent, /<song>/);
+    dialog.returnValue = choice; dialog.open = false; dialog.listeners.close();
+    assert.equal(await answer, choice === 'trash');
+  }
+});
+
+test('trash confirmation retains the clicked button after DOM event dispatch ends', async () => {
+  let resolveConsent;
+  const calls = [], button = element();
+  const handler = source.match(/li\.querySelector\('\.library-delete'\)\.onclick = (async \(e\) => \{[^]*?\n      \});/)[1];
+  const click = vm.runInNewContext(`(${handler})`, {
+    t: { song_name: 'Song', delete_url: '/delete/song', relative: 'song.wav', restore_key: 'identity' },
+    confirmMusicTrash: () => new Promise(resolve => { resolveConsent = resolve; }),
+    tracks: new Map(), currentToken: null, libraryQueue: [], reconcileLocalQueue() {}, renderQueue() {},
+    loadLibrary: async () => {}, toast() {}, fetch: async (url, options) => {
+      calls.push([url, options.headers['If-Match']]); return { ok: true, status: 204 };
+    }
+  });
+  const event = { currentTarget: button };
+  const pending = click(event);
+  event.currentTarget = null; // Browsers clear this when synchronous dispatch ends.
+  resolveConsent(true); await pending;
+  assert.deepEqual(calls, [['/delete/song', 'identity']]);
+});
+
+test('restored interruptions offer lookup instead of stale retry or progress streaming', () => {
+  const nodes = new Map(), lookups = [];
+  const item = { ...element(), querySelector: id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); } };
+  const tasks = new Map(), input = {};
+  helper('trackDownload', {
+    downloadTasks: tasks, refreshTaskCounts() {}, scheduleDownloadMarkers() {},
+    EventSource() { assert.fail('interrupted tasks cannot resume SSE'); },
+    setPanel() {}, $: () => input, sources: [{ id: 'A' }], runSearch: srcs => lookups.push([...srcs])
+  })('interrupted', item, null, () => {}, { status: 'interrupted', restored: true, source_id: 'A', song_name: 'Song', singers: 'Artist' });
+  assert.equal(nodes.get('.dl-retry').hidden, true);
+  assert.equal(nodes.get('.dl-find').hidden, false);
+  assert.equal(nodes.get('.prog').textContent, '已中断');
+  assert.match(nodes.get('.dl-delete').getAttribute('aria-label'), /移除记录/);
+  nodes.get('.dl-find').onclick();
+  assert.equal(input.value, 'Song Artist');
+  assert.deepEqual(lookups, [['A']]);
 });
 
 test('track pruning retains search, playback, current song and active batch references', () => {
@@ -666,7 +860,7 @@ test('failure messages remain complete and expose retry', () => {
   })('failed', item);
   const message = '无法转换音频：请安装 FFmpeg 和 FFprobe，并在下载面板点击重新检测后再试一次';
   listener({ data: JSON.stringify({ status: 'error', message }) });
-  assert.equal(nodes.get('.dl-error').textContent, message);
+  assert.equal(nodes.get('.dl-error').textContent, '歌曲：' + message);
   assert.equal(nodes.get('.dl-retry').hidden, false);
 });
 
@@ -693,7 +887,7 @@ test('restoring reconciles removed terminal tasks and refreshes file availabilit
     ['active', { status: 'downloading', item: 'active' }]
   ]);
   await helper('restoreDownloads', {
-    downloadTasks: tasks,
+    downloadTasks: tasks, $: () => element(),
     fetch: async () => ({ ok: true, json: async () => ({ tasks: [{ download_id: 'done', status: 'done', updated: 2 }] }) }),
     removeDlItem: item => removed.push(item), toast() { assert.fail('snapshot should restore'); }
   })();
@@ -768,7 +962,12 @@ test('switching between search and library hides only the view and preserves pla
   setView('search');
   assert.equal($('#libraryView').hidden, true);
   assert.equal($('#libraryButton').getAttribute('aria-current'), undefined);
-  assert.equal(closed, 2);
+  setView('favorites');
+  assert.equal($('#searchView').hidden, true);
+  assert.equal($('#libraryView').hidden, true);
+  assert.equal($('#favoritesView').hidden, false);
+  assert.equal($('#favoritesButton').getAttribute('aria-current'), 'page');
+  assert.equal(closed, 3);
 });
 
 test('library refresh failures preserve the last known queue and expose recovery', async () => {

@@ -34,7 +34,9 @@ from flask import (
 
 from musicdl import musicdl
 from musicdl.modules import SongInfoUtils
+from send2trash import send2trash
 import audio_formats
+from download_history import DownloadHistory
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +459,8 @@ DOWNLOAD_PENDING = deque()
 DOWNLOAD_QUEUE_LOCK = threading.Lock()
 TRANSCODE_LOCK = threading.Lock()
 DOWNLOAD_REQUEST_LOCK = threading.Lock()
-DOWNLOAD_TERMINAL = {'done', 'error', 'cancelled'}
+DOWNLOAD_TERMINAL = {'done', 'error', 'cancelled', 'interrupted'}
+DOWNLOAD_HISTORY = None
 DOWNLOAD_REQUESTS_IN_FLIGHT = 0
 
 
@@ -574,6 +577,7 @@ def _submit_download(token, entry, target, duplicate=False):
         _set_dl(ident, name=str(song.song_name), song_name=str(song.song_name),
                 singers=str(getattr(song, 'singers', '') or ''), format=target,
                 identity=_download_identity(entry), token=token, status='queued',
+                source_id=entry.get('source', ''), local=bool(entry.get('local_relative')),
                 download_root=os.path.realpath(DOWNLOAD_DIR))
         _enqueue_download(ident, token)
         return {'download_id': ident}, 200
@@ -896,6 +900,21 @@ def run_download(download_id, token):
             os.remove(tmp)
 
 
+def initialize_download_history(path=None):
+    global DOWNLOAD_HISTORY
+    path = path or os.path.join(os.environ.get('SOUNDTRACK_STATE_DIR',
+                                              os.path.join(HERE, '.runtime-home', 'state')), 'downloads.json')
+    history = DownloadHistory(path)
+    with DL_LOCK:
+        DOWNLOADS.update(history.load())
+        DOWNLOAD_HISTORY = history
+
+
+def _persist_downloads_locked():
+    if DOWNLOAD_HISTORY is not None:
+        DOWNLOAD_HISTORY.save(DOWNLOADS)
+
+
 def _set_dl(download_id, **fields):
     with DL_LOCK:
         rec = DOWNLOADS.setdefault(download_id, {})
@@ -904,8 +923,11 @@ def _set_dl(download_id, **fields):
                 if fields.get(key):
                     rec[key] = fields[key]
             return
+        previous_status = rec.get('status')
         rec.update(fields)
         rec['updated'] = time.time()
+        if previous_status != rec.get('status'):
+            _persist_downloads_locked()
 
 
 def _get_dl(download_id):
@@ -977,11 +999,11 @@ def _cancel_download(download_id):
         DOWNLOAD_PENDING.clear()
         DOWNLOAD_PENDING.extend(remaining)
         removed = len(DOWNLOAD_PENDING) != pending
-    active = not removed and status not in ('done', 'error', 'cancelled')
+    active = not removed and status not in DOWNLOAD_TERMINAL
     if not active:
         with DL_LOCK:
             rec['status'] = 'cancelled'
-    if removed or status in ('done', 'error'):
+    if removed or status in DOWNLOAD_TERMINAL:
         cleaned = _delete_download_files(
             path, tmp_path, include_audio=False, root=root,
         )
@@ -990,10 +1012,12 @@ def _cancel_download(download_id):
                 DOWNLOAD_CANCELLED.discard(download_id)
                 rec['status'] = 'error'
                 rec['message'] = '无法清理下载临时文件'
+                _persist_downloads_locked()
             return None
         with DL_LOCK:
             DOWNLOADS.pop(download_id, None)
             DOWNLOAD_CANCELLED.discard(download_id)
+            _persist_downloads_locked()
     return 'pending' if active else True
 
 
@@ -1031,6 +1055,7 @@ def _run_download_job(download_id, token):
                     rec['updated'] = time.time()
                     if not cleaned:
                         rec['message'] = '下载已停止，但无法清理本地文件'
+                    _persist_downloads_locked()
         with DOWNLOAD_QUEUE_LOCK:
             DOWNLOAD_ACTIVE -= 1
         _drain_download_queue()
@@ -1058,7 +1083,7 @@ def _drain_download_queue():
 
 
 def _enqueue_download(download_id, token):
-    # ponytail: one in-memory FIFO; persist it only if resumable downloads are added.
+    # Execution stays in memory; disk history contains receipts, never live jobs.
     _set_dl(download_id, status='queued', downloaded=0, total=0)
     with DOWNLOAD_QUEUE_LOCK:
         DOWNLOAD_PENDING.append((download_id, token))
@@ -1338,7 +1363,11 @@ def api_download():
             return jsonify({'error': str(err)}), 409
         return jsonify(result), status
     download_id = uuid.uuid4().hex[:16]
-    _set_dl(download_id, name=str(entry['song_info'].song_name), format=target)
+    _set_dl(download_id, name=str(entry['song_info'].song_name), format=target,
+            song_name=str(entry['song_info'].song_name),
+            singers=str(getattr(entry['song_info'], 'singers', '') or ''),
+            source_id=entry.get('source', ''), local=bool(entry.get('local_relative')),
+            token=token)
     _enqueue_download(download_id, token)
     return jsonify({'download_id': download_id})
 
@@ -1379,7 +1408,7 @@ def api_library_export():
 def _public_download(ident, rec):
     result = {key: rec[key] for key in (
         'name', 'song_name', 'singers', 'format', 'status', 'message', 'downloaded',
-        'total', 'speed', 'conversion_progress', 'updated', 'token',
+        'total', 'speed', 'conversion_progress', 'updated', 'token', 'restored', 'source_id', 'local',
     ) if key in rec}
     result['download_id'] = ident
     if rec.get('status') == 'done' and rec.get('path') and os.path.isfile(rec['path']):
@@ -1396,13 +1425,16 @@ def api_downloads():
     records.sort(key=lambda item: item[1].get('updated', 0), reverse=True)
     active = [item for item in records if item[1].get('status') not in DOWNLOAD_TERMINAL]
     recent = [item for item in records if item[1].get('status') in DOWNLOAD_TERMINAL][:100]
-    return jsonify({'tasks': [_public_download(ident, rec) for ident, rec in active + recent]})
+    return jsonify({'tasks': [_public_download(ident, rec) for ident, rec in active + recent],
+                    'history_warning': DOWNLOAD_HISTORY.warning if DOWNLOAD_HISTORY else ''})
 
 
 @app.route('/api/download/<download_id>/retry', methods=['POST'])
 @_track_download_request
 def api_retry_download(download_id):
     rec = _get_dl(download_id)
+    if rec.get('restored'):
+        return jsonify({'error': '请重新查找歌曲，或返回本地音乐重新导出'}), 409
     if rec.get('status') != 'error':
         return jsonify({'error': '只有失败的任务可以重试'}), 409
     entry = REGISTRY.get(rec.get('token'))
@@ -1453,7 +1485,7 @@ def api_download_progress(download_id):
                 yield 'event: error\ndata: {"message":"unknown download"}\n\n'
                 return
             yield f'event: progress\ndata: {json.dumps(_public_download(download_id, rec), ensure_ascii=False)}\n\n'
-            if rec.get('status') in ('done', 'error', 'cancelled'):
+            if rec.get('status') in DOWNLOAD_TERMINAL:
                 return
             time.sleep(0.3)
 
@@ -1509,14 +1541,51 @@ def api_delete_library_file(relative):
     if ext not in RESULT_EXT_TO_MIME:
         return '', 404
     root = os.path.realpath(DOWNLOAD_DIR)
-    path = os.path.realpath(os.path.join(root, relative))
+    path = os.path.abspath(os.path.join(root, relative))
     try:
-        if os.path.commonpath((root, path)) != root or not os.path.isfile(path):
+        if (os.path.commonpath((root, path)) != root or not os.path.isfile(path)
+                or os.path.realpath(path) != path or os.path.islink(path)):
             return '', 404
     except ValueError:
         return '', 404
-    if not _delete_download_files(path, root=root) or os.path.exists(path):
-        return jsonify({'error': '文件正在使用或无法删除'}), 409
+    # Share submission ordering so a conversion cannot start reading this song
+    # between the active-task check and moving it to Trash.
+    with DOWNLOAD_REQUEST_LOCK, DL_LOCK:
+        for rec in DOWNLOADS.values():
+            if rec.get('status') in DOWNLOAD_TERMINAL:
+                continue
+            entry = REGISTRY.get(rec.get('token')) or {}
+            local_relative = entry.get('local_relative')
+            input_path = os.path.realpath(os.path.join(rec.get('download_root') or root, local_relative)) if local_relative else None
+            if (rec.get('path') and os.path.realpath(rec['path']) == path) or input_path == path:
+                return jsonify({'error': '歌曲正在下载或转换，请完成或取消任务后再移至废纸篓'}), 409
+        expected = request.headers.get('If-Match')
+        try:
+            stat = os.stat(path)
+            current = hashlib.sha256(json.dumps([root, relative, stat.st_size, stat.st_mtime_ns]).encode()).hexdigest()
+            if expected and expected != current:
+                return jsonify({'error': '文件或下载目录已改变，请刷新本地音乐后重试'}), 409
+            companions = [path + '.soundtrack.json', path + '.soundtrack.cover']
+            companions.extend(path + '.soundtrack.cover' + suffix for suffix in COVER_MIME_SUFFIXES.values())
+            # Lyrics share the stem across formats; keep them for remaining songs.
+            siblings = [p for p in Path(path).parent.iterdir()
+                        if p.stem == Path(path).stem and str(p) != path and p.suffix.lower().lstrip('.') in RESULT_EXT_TO_MIME]
+            if not siblings:
+                companions.append(str(Path(path).with_suffix('.lrc')))
+            companions = [p for p in companions if os.path.lexists(p)]
+            if any(os.path.islink(p) or not os.path.isfile(p) for p in companions):
+                return jsonify({'error': '歌曲附属文件异常，已保留所有文件，请检查后重试'}), 409
+            send2trash(path)
+        except OSError:
+            return jsonify({'error': '无法移至系统废纸篓，文件已保留；请检查权限或文件是否正在使用'}), 409
+        failed = 0
+        for companion in companions:
+            try:
+                send2trash(companion)
+            except OSError:
+                failed += 1
+        if failed:
+            return jsonify({'warning': f'音乐已移至废纸篓，{failed} 个附属文件未能移动，仍保留在原目录'}), 200
     return '', 204
 
 
@@ -1565,6 +1634,7 @@ def api_library_cover(relative):
 
 
 if __name__ == '__main__':
+    initialize_download_history()
     port = int(os.environ.get('PORT', 5000))
     print(f'\n  🎵  Music player running at  http://127.0.0.1:{port}\n')
     app.run(host='127.0.0.1', port=port, threaded=True, debug=False)

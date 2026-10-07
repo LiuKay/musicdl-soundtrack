@@ -2,3 +2,4 @@ flask>=3.0
 musicdl>=2.13.1
 requests>=2.31
 mutagen>=1.47
+Send2Trash>=1.8.3,<3
