@@ -2,6 +2,8 @@
 
 发布前，先把代码提交并 push 到 `main`，更新 `CHANGELOG.md`，确认本地测试通过。GitHub 只能发布已经推送的代码，无法读取电脑上尚未提交的改动。
 
+提交发布代码前，将 `version.py` 的 `VERSION` 更新为本次正式版本（例如 `0.9.0`），并使用对应 Tag（`v0.9.0`）。设置页、更新比较和 macOS 应用版本统一读取这个值；仅创建新 Tag 不会自动修改应用内版本号。
+
 ## 发布前先验收 Windows
 
 首次使用时，先将 `.github/workflows/windows-validation.yml` 合入并推送到默认分支 `main`，否则 GitHub 不会显示它的手动运行入口。

@@ -31,7 +31,7 @@ function element() {
 function helper(name, context = {}) {
   const match = source.match(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`));
   assert.ok(match, `${name} is present`);
-  return vm.runInNewContext(`(${match[0]})`, { pendingDownloadRequests: 0, updateLeaveWarning() {}, ...context });
+  return vm.runInNewContext(`(${match[0]})`, { pendingDownloadRequests: 0, updateLeaveWarning() {}, downloadOrganization: () => ({ layout: 'source', naming: 'title-artist' }), ...context });
 }
 
 function cacheContext(fetch, confirm = () => true) {
@@ -194,6 +194,7 @@ test('failed download submissions remove the leave guard without leaving phantom
   const { context, listeners } = leaveWarningContext();
   let reject;
   Object.assign(context, { tracks: new Map([['song', {}]]), downloadingTokens: new Set(),
+    downloadOrganization: () => ({ layout: 'source', naming: 'title-artist' }),
     fetch: () => new Promise((_, fail) => { reject = fail; }), toast() {} });
   vm.runInContext(source.match(/async function startDownload\([^]*?\n\}/)[0], context);
   const pending = context.startDownload('song', null);
@@ -262,7 +263,8 @@ test('initialization failures are not mislabeled as network failures', () => {
 
 test('play and pause SVGs use hidden attributes, never display both', () => {
   const nodes = Object.fromEntries(['.ic-play', '.ic-pause', '#playBtn'].map(id => [id, element()]));
-  const sync = helper('syncPlayIcon', { $: id => nodes[id], document: { body: element() } });
+  const sync = helper('syncPlayIcon', { $: id => nodes[id], document: { body: element() },
+    mediaControls: { state() {}, clear() {} }, currentToken: 'song', audio: { paused: false } });
   sync(true);
   assert.equal(nodes['.ic-play'].attributes.has('hidden'), true);
   assert.equal(nodes['.ic-pause'].attributes.has('hidden'), false);
@@ -364,6 +366,7 @@ test('download labels keep the song name when preflight only returns an error', 
   const marker = element(), button = element();
   const row = { dataset: { token: 'expired' }, querySelector: selector => selector === '.a-dl' ? button : marker };
   const refresh = helper('refreshDownloadMarkers', { queue: ['expired'], markerRequestId: 1,
+    downloadedSearchTokens: new Set(), renderSearchResults() {},
     tracks: new Map([['expired', { song_name: '夜空（Live）' }]]), formatPreference: { value: 'ask' },
     document: { querySelectorAll: () => [row] },
     fetch: async () => ({ ok: true, json: async () => ({ items: [{ token: 'expired', status: 'unavailable' }] }) })
@@ -391,21 +394,6 @@ test('search empty/error messages show the placeholder and hide the table header
   assert.equal(nodes['#resultsHead'].hidden, true);
   assert.equal(nodes['#placeholder'].hidden, false);
   assert.equal(nodes['#placeholder h2'].textContent, '连接暂时中断');
-});
-
-test('late artwork responses cannot replace the next search spotlight', () => {
-  const nodes = Object.fromEntries(['#spotlight', '#spotlightTitle', '#spotlightArtist', '#spotlightCover', '#spotlightPlay'].map(id => [id, element()]));
-  const queue = ['first'];
-  let image;
-  let replaced = false;
-  nodes['#spotlightCover'].replaceChildren = () => { replaced = true; };
-  helper('showSpotlight', {
-    $: id => nodes[id], queue, ICON_PLAY: '', play() {}, Image: function() { image = this; }
-  })({ token: 'first', song_name: '<img onerror=bad>', singers: 'Artist', cover_url: 'yes' });
-  assert.equal(nodes['#spotlightTitle'].textContent, '<img onerror=bad>');
-  queue[0] = 'second';
-  image.onload();
-  assert.equal(replaced, false);
 });
 
 test('Alt track shortcuts still work with a button or slider focused', () => {
@@ -436,6 +424,7 @@ test('searching again preserves tracks referenced by the current playback queue'
     return nodes.get(id);
   };
   helper('runSearch', {
+    searchRows: new Map(), expandedVersions: new Set(), downloadedSearchTokens: new Set(),
     $, tracks, queue: ['old-a', 'old-b'], activeQueue: ['old-a', 'old-b'], currentToken: 'old-a', searchES: null,
     activeSources: () => ['MiguMusicClient'], setStatus() {}, setView() {}, rememberSearch() {},
     EventSource: function() { this.addEventListener = () => {}; },
@@ -449,6 +438,7 @@ function searchRetryContext() {
   const streams = [], nodes = new Map();
   const context = vm.createContext({
     searchES: null, sourceRetries: new Map(), searchQuery: 'original query',
+    searchRows: new Map(), expandedVersions: new Set(), downloadedSearchTokens: new Set(), renderSearchResults() {},
     queue: ['kept'], tracks: new Map([['kept', { token: 'kept', source_id: 'A', identity: 'one' }]]),
     selectedTokens: new Set(['kept']), activeQueue: ['kept'], sources: [{ id: 'A' }, { id: 'B' }],
     sourceStates: new Map([['A', { state: 'warning' }], ['B', { state: 'error' }]]),
@@ -462,7 +452,7 @@ function searchRetryContext() {
     },
     setSourceState(id, state, text) { context.sourceStates.set(id, { state, text }); },
     setStatus() {}, renderSourceStates() {}, scheduleDownloadMarkers() {}, addRow() {},
-    updateSelection() {}, showSpotlight() {}, showSearchMessage() {}, sourceErrorMessage: () => 'failed',
+    updateSelection() {}, showSearchMessage() {}, sourceErrorMessage: () => 'failed',
     rememberSearch() {}, setView() {}, pruneTracks() {}, activeSources: () => ['A', 'B']
   });
   for (const name of ['runSearch', 'retrySource']) vm.runInContext(source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))[0], context);
@@ -508,9 +498,9 @@ test('main search completion counts results added by source retry before other s
   streams[0].emit('source_error', { source: 'A' }); context.retrySource('A');
   streams[1].emit('result', { token: 'retried', source_id: 'A', identity: 'new' });
   streams[0].emit('done');
-  assert.deepEqual(statuses.at(-1), [true, '共 1 首']);
+  assert.deepEqual(statuses.at(-1), [true, '共 1 个版本']);
   streams[1].emit('source_done', { source: 'A', count: 1 }); streams[1].emit('done');
-  assert.deepEqual(statuses.at(-1), [false, '共 1 首']);
+  assert.deepEqual(statuses.at(-1), [false, '共 1 个版本']);
 });
 
 test('music trash dialog resets consent and accepts only the explicit Trash action', async () => {
@@ -602,7 +592,7 @@ test('next-up moves a queued track without duplicates and preserves shuffle prio
 test('batch selection becomes indeterminate when additional results stream in', () => {
   const nodes = new Map();
   helper('updateSelection', { $: id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
-    queue: ['a', 'b'], selectedTokens: new Set(['a']), batchDownloading: false })();
+    queue: ['a', 'b'], visibleSearchTokens: ['a', 'b'], selectedTokens: new Set(['a']), batchDownloading: false })();
   assert.equal(nodes.get('#selectAll').indeterminate, true);
   assert.equal(nodes.get('#selectAll').checked, false);
   assert.equal(nodes.get('#downloadSelected').disabled, false);
@@ -722,7 +712,8 @@ test('download request carries the selected format', async () => {
     tracks: new Map([['song', {}]]), downloadingTokens: new Set(), toast() {},
     fetch: async (_, options) => { payload = JSON.parse(options.body); return { json: async () => ({ error: 'test' }) }; }
   })('song', null, 'flac');
-  assert.deepEqual(payload, { token: 'song', format: 'flac', duplicate: false });
+  assert.deepEqual(payload, { token: 'song', format: 'flac', duplicate: false,
+    organization: { layout: 'source', naming: 'title-artist' } });
 });
 
 test('dialog keyboard input never triggers playback shortcuts', () => {

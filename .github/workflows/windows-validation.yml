@@ -53,9 +53,9 @@ jobs:
         run: |
           $env:SOUNDTRACK_FFMPEG = (Resolve-Path build/audio-tools/bin/ffmpeg.exe).Path
           $env:SOUNDTRACK_FFPROBE = (Resolve-Path build/audio-tools/bin/ffprobe.exe).Path
-          python -m unittest -v test_app.py test_audio_formats.py test_download_workflow.py test_task_recovery.py
+          python -m unittest -v test_app.py test_audio_formats.py test_download_workflow.py test_task_recovery.py test_product.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node --test test_ui.cjs test_session.cjs test_favorites.cjs
+          node --test test_ui.cjs test_session.cjs test_favorites.cjs test_product.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify packaged app, restart and system Trash
         shell: pwsh

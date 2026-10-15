@@ -2,6 +2,7 @@ from pathlib import Path
 from importlib.metadata import distribution
 
 from setuptools import setup
+from version import VERSION
 
 
 STATIC_FILES = [str(path) for path in Path('static').iterdir() if path.is_file()]
@@ -21,6 +22,7 @@ AUDIO_FILES = [('audio-tools/' + directory,
 setup(
     app=['desktop.py'],
     name='Soundtrack',
+    version=VERSION,
     data_files=[('static', STATIC_FILES), *AUDIO_FILES],
     options={
         'py2app': {
@@ -30,6 +32,7 @@ setup(
             'plist': {
                 'CFBundleDisplayName': '声轨',
                 'CFBundleIdentifier': 'com.musicdl.soundtrack',
+                'CFBundleShortVersionString': VERSION,
             },
         },
     },

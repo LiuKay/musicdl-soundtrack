@@ -24,6 +24,7 @@
     <button class="nav-item" id="libraryButton" type="button" aria-label="本地音乐" aria-controls="libraryView"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17V5l11-2v12M9 9l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="17" cy="16" rx="3" ry="2"/></svg><span class="nav-label">本地音乐</span><span class="nav-short" aria-hidden="true">本地</span></button>
     <button class="nav-item" id="downloadsButton" type="button" aria-label="下载任务" aria-controls="dlDrawer" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg><span class="nav-label">下载任务</span><span class="nav-short" aria-hidden="true">下载</span><span class="badge">0</span></button>
     <button class="nav-item" id="favoritesButton" type="button" aria-label="我的收藏" aria-controls="favoritesView"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg><span class="nav-label">我的收藏</span><span class="nav-short" aria-hidden="true">收藏</span></button>
+    <button class="nav-item" id="settingsButton" type="button" aria-label="设置" aria-controls="settingsView"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6m8 4v6"/></svg><span class="nav-label">设置</span><span class="nav-short" aria-hidden="true">设置</span><span id="updateDot" class="update-dot" hidden></span></button>
   </nav>
   <section class="sourcebar" aria-labelledby="sourceLabel">
     <h2 class="sidebar-label" id="sourceLabel">音乐来源 <span>可多选</span></h2>
@@ -31,11 +32,7 @@
     <p class="source-help" id="sourceHelp">正在连接音乐来源…</p>
   </section>
   <div class="sidebar-bottom">
-    <div class="cache-controls">
-      <label class="cache-toggle"><span>缓存已播放歌曲</span><input id="cacheToggle" type="checkbox"><span class="cache-switch" aria-hidden="true"></span></label>
-      <label class="cache-capacity" for="cacheLimit">缓存上限<select id="cacheLimit"><option value="512">512 MB</option><option value="1024" selected>1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option></select></label>
-      <button id="cacheManage" class="cache-manage" type="button" aria-controls="cachePanel" aria-expanded="false">管理播放缓存 →</button>
-    </div>
+    <button id="shortcutHelp" class="text-button" type="button">快捷键 <kbd>?</kbd></button>
     <p class="sidebar-credit">为喜欢的音乐，留个位置。<span>POWERED BY MUSICDL</span></p>
   </div>
 </aside>
@@ -54,21 +51,22 @@
   <div class="page-heading"><div><p class="eyebrow">YOUR MUSIC, YOUR MOMENT</p><h1 id="pageTitle">搜索音乐</h1></div><span class="sourcebar-hint" id="searchStatus" role="status" aria-live="polite"></span></div>
   <div class="source-status-list" id="sourceStatusList" aria-label="音乐来源搜索状态" hidden></div>
   <details id="searchHistory" class="search-history" hidden><summary>最近搜索</summary><div id="historyList"></div><button type="button" id="clearHistory" class="text-button">清空搜索历史</button></details>
-  <section class="spotlight" id="spotlight" hidden aria-label="首个搜索结果">
-    <div class="spotlight-cover" id="spotlightCover"></div>
-    <div class="spotlight-copy"><p class="eyebrow">从这首开始</p><h2 id="spotlightTitle"></h2><p id="spotlightArtist"></p></div><button class="primary-button" id="spotlightPlay" type="button">播放歌曲</button>
-  </section>
+  <div class="search-filters" id="searchFilters" hidden aria-label="筛选搜索结果">
+    <div class="filter-options">
+    <label><input id="filterLossless" type="checkbox">只看无损</label>
+    <label><input id="filterDownloaded" type="checkbox">隐藏已下载</label>
+    <label title="隐藏来源标明的试听，以及不超过 60 秒的短音频；短音频也可能是完整作品"><input id="filterPreview" type="checkbox">隐藏疑似片段</label>
+    </div>
+    <div class="filter-summary">
+    <span id="searchFilterCount" role="status" aria-live="polite" tabindex="-1"></span>
+    <button id="clearSearchFilters" type="button" class="text-button" hidden>清除筛选</button>
+    </div>
+  </div>
   <div class="results-toolbar" id="resultsToolbar" hidden>
-    <label class="select-all"><input type="checkbox" id="selectAll">全选</label>
+    <label class="select-all"><input type="checkbox" id="selectAll" aria-label="全选当前可见版本">全选可见</label>
     <span id="selectionCount">0 首歌曲</span>
-    <label class="download-preference">下载格式
-      <select id="downloadFormatPreference" aria-label="默认下载格式">
-        <option value="mp3">MP3 · 通用</option>
-        <option value="flac">原始 FLAC</option>
-        <option value="ask">每次选择</option>
-      </select>
-    </label>
-    <button type="button" id="playAll">播放全部</button>
+    <button type="button" id="clearSelection" hidden>清空选择</button>
+    <button type="button" id="playAll">播放筛选结果</button>
     <button type="button" id="downloadSelected" disabled>下载所选</button>
     <button type="button" id="favoriteSelected" disabled>收藏所选</button>
   </div>
@@ -83,10 +81,11 @@
     <span class="col col-act"></span>
   </div>
   <ul class="results" id="results"></ul>
+  <p id="searchFilterEmpty" class="dl-empty" hidden>没有符合条件的歌曲。清除筛选可查看全部结果。</p>
 
   <div class="placeholder" id="placeholder">
     <div class="empty-art" aria-hidden="true"><svg viewBox="0 0 160 160"><path d="M65 105V42l63-13v64M65 62l63-13"/><ellipse cx="47" cy="111" rx="18" ry="13"/><ellipse cx="110" cy="99" rx="18" ry="13"/></svg></div>
-    <div class="empty-copy"><span class="eyebrow">听见喜欢，留住热爱</span><h2>下一首循环，<br>从这里开始。</h2><p>搜索一首歌、一位艺人，<br>把此刻的心情放进音乐里。</p></div>
+    <div class="empty-copy"><span class="eyebrow">听见喜欢，留住热爱</span><h2>下一首循环，<br>从这里开始。</h2><p>输入歌名或歌手，先试听，再把喜欢的版本存到本地。<br>默认只搜索咪咕；多选音乐来源能找到更多版本，也可能需要更久。</p></div>
     <div class="search-suggestions"><span>试试搜索</span><button type="button" data-query="周杰伦">周杰伦 <span>↗</span></button><button type="button" data-query="陈奕迅">陈奕迅 <span>↗</span></button><button type="button" data-query="爵士">爵士 <span>↗</span></button><button type="button" data-query="纯音乐">纯音乐 <span>↗</span></button></div>
   </div>
   </section>
@@ -109,6 +108,29 @@
     <div class="library-summary"><span id="favoritesCount" role="status"></span><button id="playFavorites" class="text-button" type="button" disabled>播放筛选结果</button></div>
     <p class="library-error" id="favoritesError" role="status" hidden></p>
     <ul class="favorites-list" id="favoritesList"></ul>
+  </section>
+  <section id="settingsView" aria-labelledby="settingsTitle" hidden>
+    <div class="page-heading"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h1 id="settingsTitle" tabindex="-1">设置</h1></div><button id="settingsShortcuts" class="text-button" type="button">快捷键</button></div>
+    <div class="settings-section">
+      <h2>下载</h2>
+      <label class="setting-row" for="downloadFormatPreference"><span><strong>默认下载格式</strong><small>MP3 兼容常用播放器；FLAC 仅保存原始无损。</small></span><select id="downloadFormatPreference"><option value="mp3">MP3 · 通用</option><option value="flac">原始 FLAC</option><option value="ask">每次选择</option></select></label>
+      <label class="setting-row" for="downloadNaming"><span><strong>文件命名</strong><small>只应用于新任务，已下载文件保留原名。</small></span><select id="downloadNaming"><option value="title-artist">歌名 - 歌手</option><option value="artist-title">歌手 - 歌名</option><option value="title">仅歌名</option></select></label>
+      <label class="setting-row" for="downloadLayout"><span><strong>目录结构</strong><small>按来源、按歌手，或直接保存到下载目录。</small></span><select id="downloadLayout"><option value="source">按音乐来源</option><option value="artist">按歌手</option><option value="flat">不分目录</option></select></label>
+      <p class="setting-note">下载目录、同时下载数与转换状态可在「下载任务」查看。</p>
+    </div>
+    <div class="settings-section">
+      <h2>播放</h2>
+      <label class="setting-row" for="rememberPosition"><span><strong>记住播放位置</strong><small>重新打开后保持暂停，手动播放时从上次位置继续。</small></span><input id="rememberPosition" type="checkbox" checked></label>
+      <label class="setting-row cache-toggle" for="cacheToggle"><span><strong>缓存已播放歌曲</strong><small>减少重复加载。临时缓存会自动清理，长期保留请下载。</small></span><input id="cacheToggle" type="checkbox"></label>
+      <label class="setting-row" for="cacheLimit"><span><strong>缓存上限</strong><small>下次缓存播放或写入完成后清理。</small></span><select id="cacheLimit"><option value="512">512 MB</option><option value="1024" selected>1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option></select></label>
+      <button id="cacheManage" class="text-button" type="button" aria-controls="cachePanel" aria-expanded="false">管理播放缓存 →</button>
+    </div>
+    <div class="settings-section">
+      <h2>关于声轨 <span id="appVersion"></span></h2>
+      <label class="setting-row" for="autoUpdate"><span><strong>启动时检查更新</strong><small>只检查 GitHub 的正式版本，下载与安装由你决定。</small></span><input id="autoUpdate" type="checkbox" checked></label>
+      <p id="updateStatus" class="setting-note" role="status">正在读取版本…</p>
+      <div class="settings-actions"><button id="checkUpdate" type="button">检查更新</button><a id="releaseLink" href="https://github.com/LiuKay/musicdl-soundtrack/releases" target="_blank" rel="noopener noreferrer">前往发布页 ↗</a></div>
+    </div>
   </section>
 </main>
 
@@ -274,10 +296,27 @@
     <div class="format-actions"><button value="cancel" autofocus>取消</button><button class="format-confirm" value="trash">移至废纸篓</button></div>
   </form>
 </dialog>
+<dialog class="format-dialog shortcuts-dialog" id="shortcutsDialog" aria-labelledby="shortcutsTitle">
+  <div class="format-heading"><h2 id="shortcutsTitle">快捷键</h2><button id="shortcutsClose" type="button" aria-label="关闭快捷键帮助">✕</button></div>
+  <dl><div><dt>搜索</dt><dd><kbd>/</kbd> 或 <kbd>⌘ / Ctrl K</kbd></dd></div><div><dt>选择上一首 / 下一首结果</dt><dd><kbd>↑</kbd> <kbd>↓</kbd></dd></div><div><dt>播放所指歌曲</dt><dd><kbd>Enter</kbd></dd></div><div><dt>下载 / 收藏所指歌曲</dt><dd><kbd>D</kbd> <kbd>F</kbd></dd></div><div><dt>播放 / 暂停</dt><dd><kbd>Space</kbd></dd></div><div><dt>上一首 / 下一首</dt><dd><kbd>Alt ←</kbd> <kbd>Alt →</kbd></dd></div><div><dt>关闭面板</dt><dd><kbd>Esc</kbd></dd></div><div><dt>打开帮助</dt><dd><kbd>?</kbd></dd></div></dl>
+  <p class="setting-note">在列表空白处使用歌曲快捷键。输入文字、操作按钮和调节滑块时保留原有键盘行为。</p>
+</dialog>
 <audio id="audio" crossorigin="anonymous"></audio>
+<div id="trackMenu" class="track-menu" role="menu" aria-label="歌曲操作" hidden>
+  <p id="trackMenuTitle"></p>
+  <button type="button" role="menuitem" data-track-action="play">播放</button>
+  <button type="button" role="menuitem" data-track-action="next">下一首播放</button>
+  <button type="button" role="menuitem" data-track-action="download">下载</button>
+  <button type="button" role="menuitem" data-track-action="favorite">收藏 / 取消收藏</button>
+  <button type="button" role="menuitem" data-track-action="copy">复制歌名与歌手</button>
+  <button type="button" role="menuitem" data-track-action="research" aria-expanded="false">在其他来源搜索 ›</button>
+  <div id="trackMenuSources" role="group" aria-label="选择音乐来源" hidden></div>
+</div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="/static/session.js"></script>
 <script src="/static/favorites.js"></script>
+<script src="/static/search-model.js"></script>
+<script src="/static/media-controls.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

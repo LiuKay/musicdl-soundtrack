@@ -3,6 +3,7 @@ import json
 import hashlib
 import os
 import plistlib
+import runpy
 import shutil
 import socket
 import subprocess
@@ -133,13 +134,16 @@ def main():
         try:
             process = start(executable, env)
             project = Path(__file__).resolve().parent.parent
-            for name in ('index.html', 'style.css', 'app.js', 'session.js', 'favorites.js'):
+            for name in sorted(path.name for path in (project / 'static').iterdir() if path.is_file()):
                 route = '/' if name == 'index.html' else '/static/' + name
                 assert request(route, raw=True) == (project / 'static' / name).read_bytes(), name
+            version = runpy.run_path(str(project / 'version.py'))['VERSION']
+            assert request('/api/version')['current'] == version, 'Packaged version module missing or stale'
             check_recovery()
             print('PASS: packaged frontend assets match source; interrupted and failed receipts restored')
             assert process.poll() is None, 'Packaged process exited before export'
-            result = request('/api/library/export', {'relative': source.name, 'format': 'mp3'})
+            result = request('/api/library/export', {'relative': source.name, 'format': 'mp3',
+                             'organization': {'layout': 'flat', 'naming': 'artist-title'}})
             deadline = time.monotonic() + 30
             while True:
                 task = next(item for item in request('/api/downloads')['tasks']
@@ -151,6 +155,7 @@ def main():
                 time.sleep(.2)
             outputs = list(downloads.rglob('*.mp3'))
             assert len(outputs) == 1, outputs
+            assert outputs[0].parent == downloads and outputs[0].name.startswith('未知艺人 - '), outputs
             info = MP3(outputs[0]).info
             assert .9 <= info.length <= 1.2, info.length
             assert info.bitrate >= 300000, info.bitrate

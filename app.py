@@ -37,6 +37,8 @@ from musicdl.modules import SongInfoUtils
 from send2trash import send2trash
 import audio_formats
 from download_history import DownloadHistory
+import releases
+from version import VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -316,8 +318,8 @@ def _track_payload(song_info, token):
         'token': token,
         'source_id': entry['source'],
         'identity': _download_identity(entry),
-        'source': SUPPORTED_SOURCES.get(s(song_info.source), {}).get('short', s(song_info.source)),
-        'source_label': _source_label(song_info.source),
+        'source': SUPPORTED_SOURCES.get(entry['source'], {}).get('short', s(song_info.source)),
+        'source_label': _source_label(entry['source']),
         'song_name': s(song_info.song_name) or '未知曲目',
         'singers': s(song_info.singers) or '未知艺人',
         'album': s(song_info.album),
@@ -327,7 +329,42 @@ def _track_payload(song_info, token):
         'cover_url': s(song_info.cover_url),
         'has_lyric': bool(getattr(song_info, 'lyric', None)),
         'lossless': ext in {'flac', 'wav', 'ape', 'alac'},
+        **_quality_payload(song_info),
     }
+
+
+def _quality_payload(song):
+    raw = getattr(song, 'raw_data', {})
+    raw = raw if isinstance(raw, dict) else {}
+    download = raw.get('download', {})
+    download = download if isinstance(download, dict) else {}
+    data = download.get('data', {})
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    data = data if isinstance(data, dict) else {}
+    preview = getattr(song, 'is_preview', None) is True or data.get('is_preview') is True
+    trial = data.get('freeTrialInfo')
+    if isinstance(trial, dict):
+        try:
+            preview = preview or float(trial.get('end', 0)) > float(trial.get('start', 0)) >= 0
+        except (TypeError, ValueError):
+            pass
+    bitrate = getattr(song, 'bitrate', None) or data.get('br')
+    try:
+        bitrate = float(bitrate)
+        bitrate = round(bitrate / 1000 if bitrate > 10000 else bitrate)
+        bitrate = bitrate if 8 <= bitrate <= 10000 else None
+    except (ValueError, TypeError, OverflowError):
+        bitrate = None
+    try:
+        seconds = float(getattr(song, 'duration_s', 0) or 0)
+        if seconds <= 0:
+            parts = str(getattr(song, 'duration', '')).split(':')
+            seconds = sum(float(part) * 60 ** index for index, part in enumerate(reversed(parts)))
+    except (ValueError, TypeError, OverflowError):
+        seconds = 0
+    return {'bitrate_kbps': bitrate, 'preview': bool(preview),
+            'preview_suspected': not preview and 0 < seconds <= 60}
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +596,7 @@ def _download_plan_item(token, entry, target, library):
     return item
 
 
-def _submit_download(token, entry, target, duplicate=False):
+def _submit_download(token, entry, target, duplicate=False, organization=None):
     # Serialize check + reservation so concurrent clicks/tabs cannot enqueue twins.
     with DOWNLOAD_REQUEST_LOCK:
         item = _download_plan_item(token, entry, target, _library_tracks())
@@ -578,14 +615,39 @@ def _submit_download(token, entry, target, duplicate=False):
                 singers=str(getattr(song, 'singers', '') or ''), format=target,
                 identity=_download_identity(entry), token=token, status='queued',
                 source_id=entry.get('source', ''), local=bool(entry.get('local_relative')),
+                organization=organization or {'layout': 'source', 'naming': 'title-artist'},
                 download_root=os.path.realpath(DOWNLOAD_DIR))
         _enqueue_download(ident, token)
         return {'download_id': ident}, 200
 
 
 def _safe_name(name):
-    name = re.sub(r'[\\/:*?"<>|]', '_', name or 'track').strip()
-    return name[:120] or 'track'
+    name = re.sub(r'[\x00-\x1f\x7f\\/:*?"<>|]', '_', name or 'track').strip(' .')
+    if re.match(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)', name, re.I):
+        name = '_' + name
+    return name.encode('utf-8')[:120].decode('utf-8', errors='ignore').rstrip(' .') or 'track'
+
+
+def _download_organization(data):
+    value = data.get('organization', {'layout': 'source', 'naming': 'title-artist'})
+    if (not isinstance(value, dict) or value.get('layout') not in ('source', 'artist', 'flat')
+            or value.get('naming') not in ('title-artist', 'artist-title', 'title')):
+        raise ValueError('请选择有效的文件命名与目录结构')
+    return {'layout': value['layout'], 'naming': value['naming']}
+
+
+def _download_destination(root, entry, ext, organization):
+    song, source = entry['song_info'], entry['source']
+    title = _safe_name(str(song.song_name or '未知曲目'))
+    artist = _safe_name(str(getattr(song, 'singers', '') or '未知艺人'))
+    directory = {'source': _safe_name(SUPPORTED_SOURCES.get(source, {}).get('short', source)),
+                 'artist': artist, 'flat': ''}[organization['layout']]
+    sub = os.path.realpath(os.path.join(root, directory))
+    if os.path.commonpath((root, sub)) != root:
+        raise ValueError('下载子目录不在当前下载目录内')
+    name = {'title-artist': f'{title} - {artist}', 'artist-title': f'{artist} - {title}',
+            'title': title}[organization['naming']]
+    return sub, _safe_name(name) + '.' + ext
 
 
 def _parse_byte_range(value, total_size):
@@ -789,14 +851,11 @@ def run_download(download_id, token):
     download_root = _get_dl(download_id).get('download_root') or os.path.realpath(DOWNLOAD_DIR)
     if download_root != os.path.realpath(DOWNLOAD_DIR):
         raise ValueError('下载目录已改变，请在当前目录重试')
-    source_dir = _safe_name(SUPPORTED_SOURCES.get(source, {}).get('short', source)).strip('.') or 'Local'
-    sub = os.path.realpath(os.path.join(download_root, source_dir))
-    if os.path.commonpath((download_root, sub)) != download_root:
-        raise ValueError('下载子目录不在当前下载目录内')
-    os.makedirs(sub, exist_ok=True)
     target = _get_dl(download_id).get('format')
     ext = target or re.sub(r'[^a-z0-9]', '', str(song.ext).lower()) or 'mp3'
-    fname = f"{_safe_name(str(song.song_name))} - {_safe_name(str(song.singers))}.{ext}"
+    organization = _get_dl(download_id).get('organization') or {'layout': 'source', 'naming': 'title-artist'}
+    sub, fname = _download_destination(download_root, entry, ext, organization)
+    os.makedirs(sub, exist_ok=True)
     path = os.path.join(sub, fname)
     # Reserve a distinct output for explicit-format tasks; never replace a song.
     with DL_LOCK:
@@ -1185,6 +1244,13 @@ def api_sources():
     ])
 
 
+@app.route('/api/version')
+def api_version():
+    if request.args.get('check') == '1':
+        return jsonify(releases.check_update())
+    return jsonify({'current': VERSION, 'releases_url': releases.RELEASES_URL})
+
+
 @app.route('/api/search')
 def api_search():
     keyword = (request.args.get('q') or '').strip()
@@ -1358,7 +1424,11 @@ def api_download():
         if target not in ('mp3', 'flac'):
             return jsonify({'error': '仅支持 MP3 和原始 FLAC'}), 400
         try:
-            result, status = _submit_download(token, entry, target, data.get('duplicate', False))
+            organization = _download_organization(data)
+        except ValueError as err:
+            return jsonify({'error': str(err)}), 400
+        try:
+            result, status = _submit_download(token, entry, target, data.get('duplicate', False), organization)
         except ValueError as err:
             return jsonify({'error': str(err)}), 409
         return jsonify(result), status
@@ -1395,11 +1465,12 @@ def api_library_export():
             or not isinstance(data.get('duplicate', False), bool)):
         return jsonify({'error': '本地导出仅支持 MP3'}), 400
     try:
+        organization = _download_organization(data)
         entry = _local_entry(data.get('relative'))
         if entry['song_info'].ext == 'mp3':
             return jsonify({'error': '该文件已经是 MP3，可直接使用'}), 400
         token = REGISTRY.add_local(entry)
-        result, status = _submit_download(token, entry, 'mp3', data.get('duplicate', False))
+        result, status = _submit_download(token, entry, 'mp3', data.get('duplicate', False), organization)
         return jsonify(result), status
     except (ValueError, OSError) as err:
         return jsonify({'error': str(err)}), 400

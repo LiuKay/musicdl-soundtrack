@@ -17,6 +17,7 @@ const SessionState = (() => {
     return {
       version: 1, items, order,
       current: validIndex(data.current) ? data.current : null,
+      position: Number.isFinite(data.position) && data.position > 0 ? Math.min(data.position, 604800) : 0,
       shuffle: data.shuffle === true,
       repeat: ['off', 'all', 'one'].includes(data.repeat) ? data.repeat : 'off',
       history: [...new Set((Array.isArray(data.history) ? data.history : [])

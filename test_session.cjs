@@ -9,6 +9,15 @@ function session(context = {}) {
 }
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test('position snapshots are optional, finite and bounded', () => {
+  const normalize = session().normalize;
+  assert.equal(normalize({ version: 1, position: 9 }).position, 9);
+  for (const position of [-1, NaN, Infinity, '9', null]) {
+    assert.equal(normalize({ version: 1, position }).position, 0);
+  }
+  assert.equal(normalize({ version: 1, position: 1e12 }).position, 604800);
+});
+
 test('snapshots are bounded, versioned, and never store tokens, URLs or credentials', () => {
   const state = session().normalize({ version: 1, items: Array.from({ length: 250 }, () => ({
     song_name: '歌 (Live)', identity: 'id', source_id: 'MiguMusicClient', token: 'expired',
@@ -93,6 +102,7 @@ test('restoring retains order, current selection and modes without autoplay or n
   const ctx = appFunctions(['restoreSession'], {
     savedSession: session().normalize({ version: 1, items: [track, { ...track, identity: 'two' }],
       current: 1, order: [1, 0], shuffle: true, repeat: 'all' }),
+    rememberPosition: { checked: true }, pendingResume: null,
     tracks: new Map(), activeQueue: [], $: () => ({ setAttribute() {} }),
     syncRepeatMode() {}, syncPlayIcon() {}, showNowPlaying() {}, renderHistory() {}, renderQueue() {}
   });
@@ -107,6 +117,7 @@ test('switching or cancelling during resolution cannot start the old song', asyn
   const played = [];
   const ctx = appFunctions(['cancelPlaybackRequest', 'play'], {
     playbackRequest: 0, playbackController: null, currentToken: null, refreshAttempted: false,
+    pendingResume: null, rememberPosition: { checked: true }, saveSession() {},
     tracks: new Map(['a', 'b'].map(token => [token, { ...track, token, pendingResolution: true }])),
     activeQueue: ['a', 'b'], queue: ['a', 'b'], shuffleOrder: ['a', 'b'],
     AbortController, SessionState: { resolveRemote: () => new Promise(resolve => deferred.push(resolve)) },
