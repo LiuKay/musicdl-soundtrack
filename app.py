@@ -1519,7 +1519,8 @@ def api_retry_download(download_id):
             token = REGISTRY.add_local(entry)
         else:
             token = rec['token']
-        result, status = _submit_download(token, entry, rec['format'])
+        result, status = _submit_download(token, entry, rec['format'],
+                                          organization=rec.get('organization'))
         if status == 200:
             _cancel_download(download_id)
         return jsonify(result), status

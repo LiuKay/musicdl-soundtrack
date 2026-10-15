@@ -150,15 +150,28 @@ class DownloadWorkflowTest(DownloadWorkflowFixture):
         self.assertIn('FFmpeg', response.get_json()['error'])
 
     def test_retry_resubmits_only_failed_task_and_removes_old_record(self):
-        result = self.client.post('/api/download', json={'token': 'one', 'format': 'mp3'}).get_json()
-        ident = result['download_id']
-        self.assertEqual(self.client.post(f'/api/download/{ident}/retry').status_code, 409)
-        app._set_dl(ident, status='error', message='network failed')
-        response = self.client.post(f'/api/download/{ident}/retry')
-        self.assertEqual(response.status_code, 200)
-        self.assertNotEqual(response.get_json()['download_id'], ident)
-        self.assertNotIn(ident, app.DOWNLOADS)
-        self.assertEqual(self.enqueue.call_count, 2)
+        for organization in [None, {'layout': 'artist', 'naming': 'artist-title'},
+                             {'layout': 'flat', 'naming': 'title'}]:
+            with self.subTest(organization=organization):
+                app.DOWNLOADS.clear()
+                self.enqueue.reset_mock()
+                body = {'token': 'one', 'format': 'mp3'}
+                if organization is not None:
+                    body['organization'] = organization
+                result = self.client.post('/api/download', json=body).get_json()
+                ident = result['download_id']
+                self.assertEqual(self.client.post(f'/api/download/{ident}/retry').status_code, 409)
+                app._set_dl(ident, status='error', message='network failed')
+                if organization is None:
+                    app.DOWNLOADS[ident].pop('organization', None)
+                response = self.client.post(f'/api/download/{ident}/retry')
+                self.assertEqual(response.status_code, 200)
+                retried = response.get_json()['download_id']
+                self.assertNotEqual(retried, ident)
+                self.assertEqual(app.DOWNLOADS[retried]['organization'], organization or {
+                    'layout': 'source', 'naming': 'title-artist'})
+                self.assertNotIn(ident, app.DOWNLOADS)
+                self.assertEqual(self.enqueue.call_count, 2)
 
     def test_retry_refuses_changed_directory(self):
         response = self.client.post('/api/download', json={'token': 'one', 'format': 'mp3'})
