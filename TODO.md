@@ -10,7 +10,9 @@
 - [x] 设置与信任：设置页集中格式、命名、缓存与更新；来源最近状态、精简确认与中英文 README、详细使用文档、macOS 首次打开说明；GitHub 正式版本只读检查，无自动安装。
 - [x] 本地回归、真实咪咕搜索、桌面/平板/手机浏览器、macOS 隔离打包与增强冒烟验证。详见[实施与验收记录](docs/product-polish.md)。
 
-本批准备随 v0.9.0 发布。Windows 原生交互、实体媒体键/耳机和 VoiceOver / NVDA 的实际体验继续保留为实机验收；macOS Developer ID 公证未配置，首次打开采用文档指引。
+已随 [v0.9.0](https://github.com/LiuKay/musicdl-soundtrack/releases/tag/v0.9.0) 发布，Tag 固定到 `d850351`。macOS / Windows 正式构建与独立 Windows 验收均通过，4 个发布附件下载、SHA-256、压缩包完整性、前端资源及许可证检查通过；详见[发布验收记录](docs/product-polish.md)。
+
+Windows 原生交互、实体媒体键/耳机和 VoiceOver / NVDA 的实际体验继续保留为实机验收；macOS Developer ID 公证未配置，首次打开采用文档指引。
 
 ## v0.6.0：下载更省心（已发布）
 

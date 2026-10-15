@@ -31,7 +31,7 @@ musicdl -> Flask 搜索流 -> SearchModel -> 搜索列表 -> 播放队列
 - 1280px 桌面、820px 平板和 375px 手机无页面横向溢出；手机行操作按钮为 40×40px，来源名保留，快捷键帮助在可视区域内。浏览器错误与未处理 Promise 拒绝记录为空。
 - 默认咪咕源联网搜索「周杰伦 晴天」，返回 8 个结果，超时和请求错误均为零；未知码率保持未知。没有使用真实平台音乐完成播放或下载验收。
 - 最新源码在独立目录构建 macOS 应用成功；安装包全部前端文件逐一比对源码，版本接口正确；清空 PATH 后通过内置工具导出 MP3（不分目录 / 歌手在前）、原文件保留、实际重启与任务记录恢复、系统废纸篓检查。测试只操作生成文件，临时应用使用独立 Bundle ID 和网页存储。
-- Python / JavaScript 语法、`git diff --check`、工作流 YAML 语法与本轮文档本地链接检查通过。Windows validation 已接入新增测试；尚未推送或运行远端工作流。
+- Python / JavaScript 语法、`git diff --check`、工作流 YAML 语法与本轮文档本地链接检查通过。以上为发布前本地验收，远端工作流与正式附件检查见下节。
 
 界面：[桌面分组与筛选](product-search-desktop.png)、[手机搜索](product-search-mobile.png)、[设置](product-settings-desktop.png)。截图均为本地生成测试素材，不代表线上曲目或音质。
 
@@ -39,4 +39,19 @@ musicdl -> Flask 搜索流 -> SearchModel -> 搜索列表 -> 播放队列
 
 范围与四项建议一致；按深度审查完成安全、结构和异步组合检查。固定更新仓库与超时/缓存、仅保存必要元数据、文件命名白名单、UTF-8 长度/系统保留名、目录与符号链接边界均已检查，无新增依赖、外部账号、自动安装或数据迁移。发现的菜单键兼容、晚到暂停事件、流式主版本切换焦点及内部来源名显示问题均已修复，并有回归覆盖。发布复核补正失败重试遗漏命名/目录预设的问题：扩展原有重试测试，确认旧代码的两个自定义预设子场景失败，修复后连同缺少预设的旧任务兼容场景通过。
 
-Windows 原生交互、实体媒体键/耳机及 VoiceOver / NVDA 朗读未实测。Media Session 的可用操作由系统与内核决定；缺失接口时保留普通播放器功能。macOS 未配置 Developer ID 公证，首次打开说明见 [first-launch.md](first-launch.md)。本轮准备随 v0.9.0 发布，远端构建与附件验收另行记录。
+Windows 原生交互、实体媒体键/耳机及 VoiceOver / NVDA 朗读未实测。Media Session 的可用操作由系统与内核决定；缺失接口时保留普通播放器功能。macOS 未配置 Developer ID 公证，首次打开说明见 [first-launch.md](first-launch.md)。本轮已随 v0.9.0 发布。
+
+## 发布验收（2026-10-14）
+
+- [v0.9.0 Release](https://github.com/LiuKay/musicdl-soundtrack/releases/tag/v0.9.0) 为正式版本，Tag 固定到 [`d850351`](https://github.com/LiuKay/musicdl-soundtrack/commit/d85035122d4282b7b9a3e80217fc1d2d470540f1)，应用内与 macOS Bundle 版本均为 `0.9.0`。公共更新接口实测识别该版本为当前正式版。
+- [Windows 发布前验收](https://github.com/LiuKay/musicdl-soundtrack/actions/runs/38678947653) 测试相同提交：Python 103 项中 102 项通过、1 项符号链接权限检查按平台跳过；前端 98 项通过。构建、清空 PATH 的内置转换、实际重启、任务记录和系统回收站检查通过。
+- [macOS 正式构建](https://github.com/LiuKay/musicdl-soundtrack/actions/runs/38679720607) 的 Python 103 项与前端 98 项全部通过；[Windows 正式构建](https://github.com/LiuKay/musicdl-soundtrack/actions/runs/38679720701) 打包及冒烟通过。两平台正式包均验证前端资源、版本接口、原文件保留、内置 WAV → MP3、实际重启与任务记录、系统废纸篓 / 回收站。macOS 另验证只读资源目录下的来源初始化与搜索完成；该次查询返回 0 条，不作为真实曲目可播证明。
+- 4 个正式附件均已上传并下载到本地，原始附件的 SHA-256 与 GitHub 发布元数据一致，大小与上传记录一致；ZIP CRC、gzip/TAR、前端内容、内置工具与许可证检查通过。Windows 文本为 CRLF，与本机 LF 源码逐文件规范化换行后内容一致；附件本身的哈希按原始字节核对，未重新打包或替换发布文件。
+- 从实际二进制头确认 macOS 内置工具为 Apple Silicon arm64，Windows 应用为 x64；当前不提供另一个架构的预编译附件。对应源码附件包含 FFmpeg / LAME 源码、匹配的构建脚本内容与平台构建配置。
+
+| 附件 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `Soundtrack-Windows-v0.9.0.zip` | 69860610 | `0fbf3a98e2fafca5c1cddc3a8c1450b145278053e75b538f64dfa3a8bb627711` |
+| `Soundtrack-audio-sources-Windows-v0.9.0.tar.gz` | 13260773 | `9b3e81fb5934f21e982aed44b80474998ac896d7e5b9c53820e88bc971c7763a` |
+| `Soundtrack-audio-sources-macOS-v0.9.0.tar.gz` | 13263481 | `d2ddd92f8a612424d5d01091cf478d14625c128edbf16fa526bc1caa7b60b413` |
+| `Soundtrack-macOS-v0.9.0.zip` | 80708082 | `b9bf9e27eeea69a4424c3dd0744fd7cfce313084dc46b8b36b889a4419334423` |

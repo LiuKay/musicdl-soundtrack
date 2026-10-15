@@ -20,6 +20,7 @@
 - 103 项 Python、98 项前端测试通过；覆盖分组与筛选、媒体接口降级、播放位置、快捷键与菜单、更新失败、命名预设及路径边界。
 - 浏览器验证 1280px、820px、375px 布局、组合筛选、每组一首播放、隐藏选择提示、设置持久化及生成素材的 FLAC → MP3 导出；真实咪咕搜索返回有效结果。
 - 本地 macOS 隔离打包验证资源与版本、内置转换、保留原文件、跨重启任务记录和系统废纸篓。Windows 原生交互、实体媒体键/耳机和 VoiceOver / NVDA 尚未实测；真实平台音乐的播放和下载不在本轮验收范围。macOS 未配置 Developer ID 公证。
+- macOS / Windows 正式发布 CI 与独立 Windows validation 通过；Windows Python 回归 102 项通过、1 项符号链接权限检查按平台跳过，前端 98 项通过。4 个发布附件已下载并校验 GitHub SHA-256、ZIP/TAR 完整性、前端资源及音频工具许可证；macOS 包为 Apple Silicon arm64，Windows 包为 x64。详见[发布验收记录](docs/product-polish.md)。
 
 ## v0.8.0 — 2026-10-07
 
