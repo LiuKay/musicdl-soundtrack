@@ -32,11 +32,11 @@ On Windows activate with `.venv\Scripts\Activate.ps1`. Use `PORT=8080 python app
 
 ## Five steps
 
-1. Search by song or artist. Migu is enabled initially; select more sources to find alternatives, allowing more time.
-2. Combine lossless, downloaded and possible-clip filters. Expand “N 个版本” to compare source, format and known bitrate; live and instrumental names stay intact.
-3. Play a track to listen, or play filtered results with one default version per song. Further searches leave the active queue intact.
-4. Download a single track or select a batch. MP3 is the default; Settings offers original FLAC or ask-each-time. Existing files trigger confirmation.
-5. Find files in Local music and retain tracks in Favorites. Settings contains caching, position memory, update checks and shortcut help.
+1. Search by song or artist from the unified top bar. Migu is enabled initially; toggle more source pills right below the search bar to compare alternatives.
+2. Combine lossless, hide-downloaded and exclude-clip filter pills. Expand “N 版本 ▾” to compare source, format and known bitrate in a tree view; live and instrumental names stay intact.
+3. Play a track to listen, click the album cover or Lyrics button to open the dual-column artwork, spectrum and synced-lyrics stage, or play filtered results with one default version per song. Further searches leave the active queue intact.
+4. Download the currently playing track directly from the player bar, download a single row, or check tracks to reveal the floating batch bar. MP3 is the default; Preferences offers original FLAC or ask-each-time. Existing files trigger confirmation.
+5. Filter Local music and Favorites from the same top search bar. Preferences includes system/light/dark appearance, caching, position memory, update checks and shortcut help, while active downloads live in the top-right Tasks drawer.
 
 Sources include Migu, NetEase, Kuwo, QQ Music, Kugou, 5sing, Jamendo and Spotify. Availability depends on connectivity and provider APIs. Short audio is only marked as a possible clip and may be a complete work. Grouping and default quality choices are not popularity rankings.
 

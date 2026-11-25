@@ -3,159 +3,393 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<script>
+try {
+  const savedScheme = localStorage.getItem('soundtrack-color-scheme');
+  if (savedScheme === 'light' || savedScheme === 'dark') {
+    document.querySelector('meta[name="color-scheme"]').content = savedScheme;
+  }
+} catch {}
+</script>
 <title>声轨 · Soundtrack</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <nav class="skip-links" aria-label="快捷跳转"><a href="#mainContent">跳到歌曲列表</a><a href="#player">跳到播放器</a></nav>
+
 <aside class="sidebar" aria-label="音乐导航">
   <div class="brand">
-    <div class="brand-mark" id="brandMark">
+    <div class="brand-mark" id="brandMark" aria-hidden="true">
       <span></span><span></span><span></span><span></span><span></span>
     </div>
     <div class="brand-text">
-      <h1>声轨</h1>
+      <span class="brand-name">声轨</span>
       <p>Soundtrack</p>
     </div>
   </div>
 
   <nav class="navigation" aria-label="资料库">
-    <button class="nav-item selected" id="browseButton" type="button" aria-label="搜索音乐" aria-controls="searchView" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><span class="nav-label">搜索音乐</span><span class="nav-short" aria-hidden="true">搜索</span></button>
-    <button class="nav-item" id="libraryButton" type="button" aria-label="本地音乐" aria-controls="libraryView"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17V5l11-2v12M9 9l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="17" cy="16" rx="3" ry="2"/></svg><span class="nav-label">本地音乐</span><span class="nav-short" aria-hidden="true">本地</span></button>
-    <button class="nav-item" id="downloadsButton" type="button" aria-label="下载任务" aria-controls="dlDrawer" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg><span class="nav-label">下载任务</span><span class="nav-short" aria-hidden="true">下载</span><span class="badge">0</span></button>
-    <button class="nav-item" id="favoritesButton" type="button" aria-label="我的收藏" aria-controls="favoritesView"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg><span class="nav-label">我的收藏</span><span class="nav-short" aria-hidden="true">收藏</span></button>
-    <button class="nav-item" id="settingsButton" type="button" aria-label="设置" aria-controls="settingsView"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6m8 4v6"/></svg><span class="nav-label">设置</span><span class="nav-short" aria-hidden="true">设置</span><span id="updateDot" class="update-dot" hidden></span></button>
+    <button class="nav-item selected" id="browseButton" type="button" aria-label="探索搜索" aria-current="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>
+      <span class="nav-label">探索搜索</span>
+      <span class="nav-short" aria-hidden="true">探索</span>
+    </button>
+    <button class="nav-item" id="libraryButton" type="button" aria-label="本地音乐">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17V5l11-2v12M9 9l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="17" cy="16" rx="3" ry="2"/></svg>
+      <span class="nav-label">本地音乐</span>
+      <span class="nav-short" aria-hidden="true">本地</span>
+      <span id="libraryNavCount" class="nav-count" hidden></span>
+    </button>
+    <button class="nav-item" id="favoritesButton" type="button" aria-label="我的收藏">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-7-4.35-7-10.1A4.4 4.4 0 0 1 9.4 6c1.4 0 2.6.68 2.6.68S13.2 6 14.6 6A4.4 4.4 0 0 1 19 10.4c0 5.75-7 10.1-7 10.1Z"/></svg>
+      <span class="nav-label">我的收藏</span>
+      <span class="nav-short" aria-hidden="true">收藏</span>
+      <span id="favoritesNavCount" class="nav-count" hidden></span>
+    </button>
+    <button class="nav-item mobile-only-nav" id="mobileDownloadsButton" type="button" aria-label="下载任务" aria-controls="dlDrawer" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg>
+      <span class="nav-short" aria-hidden="true">任务</span>
+      <span id="mobileDlBadge" class="badge">0</span>
+    </button>
+    <button class="nav-item" id="settingsButton" type="button" aria-label="偏好设置">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6m8 4v6"/></svg>
+      <span class="nav-label">偏好设置</span>
+      <span class="nav-short" aria-hidden="true">设置</span>
+      <span id="updateDot" class="update-dot" hidden></span>
+    </button>
   </nav>
-  <section class="sourcebar" aria-labelledby="sourceLabel">
-    <h2 class="sidebar-label" id="sourceLabel">音乐来源 <span>可多选</span></h2>
-    <div class="chips" id="chips"></div>
-    <p class="source-help" id="sourceHelp">正在连接音乐来源…</p>
-  </section>
+
   <div class="sidebar-bottom">
-    <button id="shortcutHelp" class="text-button" type="button">快捷键 <kbd>?</kbd></button>
+    <button id="shortcutHelp" class="neutral-btn sidebar-shortcut" type="button">
+      <span>快捷键</span>
+      <kbd>?</kbd>
+    </button>
     <p class="sidebar-credit">为喜欢的音乐，留个位置。<span>POWERED BY MUSICDL</span></p>
   </div>
 </aside>
 
 <header class="topbar">
-  <span class="topbar-label">音乐，随心而听。</span>
   <form class="search" id="searchForm" role="search" autocomplete="off">
-    <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-    <input id="searchInput" type="search" aria-label="搜索歌曲、艺人" placeholder="搜索歌曲、艺人或专辑" spellcheck="false">
+    <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <label for="searchInput" class="visually-hidden">搜索歌曲、艺人或筛选当前列表</label>
+    <input id="searchInput" type="search" placeholder="搜索歌曲、艺人或专辑 (⌘K)" spellcheck="false">
+    <kbd class="search-kbd" aria-hidden="true">⌘K</kbd>
     <button type="submit" id="searchBtn">搜索</button>
   </form>
+
+  <div class="topbar-actions">
+    <button class="task-ring-btn" id="downloadsButton" type="button" aria-label="下载任务" aria-controls="dlDrawer" aria-expanded="false">
+      <svg class="task-ring-svg" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-opacity="0.2" stroke-width="2.4"/>
+        <circle id="dlProgressArc" cx="12" cy="12" r="9" fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-dasharray="56.5" stroke-dashoffset="56.5" stroke-linecap="round"/>
+      </svg>
+      <span class="task-ring-label">任务</span>
+      <span class="badge">0</span>
+    </button>
+  </div>
 </header>
 
-<main class="results-wrap" id="mainContent" tabindex="-1" aria-label="歌曲列表">
+<main class="results-wrap" id="mainContent" tabindex="-1" aria-label="主工作区">
   <section id="searchView" aria-labelledby="pageTitle">
-  <div class="page-heading"><div><p class="eyebrow">YOUR MUSIC, YOUR MOMENT</p><h1 id="pageTitle">搜索音乐</h1></div><span class="sourcebar-hint" id="searchStatus" role="status" aria-live="polite"></span></div>
-  <div class="source-status-list" id="sourceStatusList" aria-label="音乐来源搜索状态" hidden></div>
-  <details id="searchHistory" class="search-history" hidden><summary>最近搜索</summary><div id="historyList"></div><button type="button" id="clearHistory" class="text-button">清空搜索历史</button></details>
-  <div class="search-filters" id="searchFilters" hidden aria-label="筛选搜索结果">
-    <div class="filter-options">
-    <label><input id="filterLossless" type="checkbox">只看无损</label>
-    <label><input id="filterDownloaded" type="checkbox">隐藏已下载</label>
-    <label title="隐藏来源标明的试听，以及不超过 60 秒的短音频；短音频也可能是完整作品"><input id="filterPreview" type="checkbox">隐藏疑似片段</label>
-    </div>
-    <div class="filter-summary">
-    <span id="searchFilterCount" role="status" aria-live="polite" tabindex="-1"></span>
-    <button id="clearSearchFilters" type="button" class="text-button" hidden>清除筛选</button>
-    </div>
-  </div>
-  <div class="results-toolbar" id="resultsToolbar" hidden>
-    <label class="select-all"><input type="checkbox" id="selectAll" aria-label="全选当前可见版本">全选可见</label>
-    <span id="selectionCount">0 首歌曲</span>
-    <button type="button" id="clearSelection" hidden>清空选择</button>
-    <button type="button" id="playAll">播放筛选结果</button>
-    <button type="button" id="downloadSelected" disabled>下载所选</button>
-    <button type="button" id="favoriteSelected" disabled>收藏所选</button>
-  </div>
-  <div class="results-head" id="resultsHead" hidden>
-    <span class="col col-select"></span>
-    <span class="col col-cover"></span>
-    <span class="col col-title">曲目</span>
-    <span class="col col-album">专辑</span>
-    <span class="col col-dur">时长</span>
-    <span class="col col-size">大小</span>
-    <span class="col col-src">来源</span>
-    <span class="col col-act"></span>
-  </div>
-  <ul class="results" id="results"></ul>
-  <p id="searchFilterEmpty" class="dl-empty" hidden>没有符合条件的歌曲。清除筛选可查看全部结果。</p>
+    <!-- Converged Source Chips + Filter Pills Strip -->
+    <div class="source-filter-bar" id="sourceFilterBar">
+      <div class="sourcebar" aria-labelledby="sourceLabel">
+        <span class="sourcebar-title" id="sourceLabel">来源</span>
+        <div class="chips" id="chips" role="group" aria-labelledby="sourceLabel"></div>
+        <span class="visually-hidden" id="sourceHelp">正在连接音乐来源…</span>
+      </div>
 
-  <div class="placeholder" id="placeholder">
-    <div class="empty-art" aria-hidden="true"><svg viewBox="0 0 160 160"><path d="M65 105V42l63-13v64M65 62l63-13"/><ellipse cx="47" cy="111" rx="18" ry="13"/><ellipse cx="110" cy="99" rx="18" ry="13"/></svg></div>
-    <div class="empty-copy"><span class="eyebrow">听见喜欢，留住热爱</span><h2>下一首循环，<br>从这里开始。</h2><p>输入歌名或歌手，先试听，再把喜欢的版本存到本地。<br>默认只搜索咪咕；多选音乐来源能找到更多版本，也可能需要更久。</p></div>
-    <div class="search-suggestions"><span>试试搜索</span><button type="button" data-query="周杰伦">周杰伦 <span>↗</span></button><button type="button" data-query="陈奕迅">陈奕迅 <span>↗</span></button><button type="button" data-query="爵士">爵士 <span>↗</span></button><button type="button" data-query="纯音乐">纯音乐 <span>↗</span></button></div>
-  </div>
+      <div class="search-filters" id="searchFilters" hidden aria-label="筛选搜索结果">
+        <div class="filter-options">
+          <label class="filter-pill"><input id="filterLossless" type="checkbox"><span>只看无损</span></label>
+          <label class="filter-pill"><input id="filterDownloaded" type="checkbox"><span>隐藏已下载</span></label>
+          <label class="filter-pill" title="隐藏来源标明的试听，以及不超过 60 秒的短音频；短音频也可能是完整作品"><input id="filterPreview" type="checkbox"><span>排除片段</span></label>
+          <button id="clearSearchFilters" type="button" class="pill-reset" hidden>重置</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="view-header">
+      <div class="view-title-group">
+        <h1 id="pageTitle">探索音乐</h1>
+        <span id="searchFilterCount" class="view-count" role="status" aria-live="polite" tabindex="-1"></span>
+        <span class="sourcebar-hint" id="searchStatus" role="status" aria-live="polite"></span>
+      </div>
+      <div class="view-actions" id="searchHeadActions" hidden>
+        <label class="select-all"><input type="checkbox" id="selectAll" aria-label="全选当前可见版本"><span>全选可见</span></label>
+        <button type="button" id="playAll" class="primary-button">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+          <span>播放筛选结果</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="source-status-list" id="sourceStatusList" aria-label="音乐来源搜索状态" hidden></div>
+
+    <details id="searchHistory" class="search-history" hidden>
+      <summary>最近搜索</summary>
+      <div class="history-body">
+        <div id="historyList"></div>
+        <button type="button" id="clearHistory" class="neutral-btn">清空历史</button>
+      </div>
+    </details>
+
+    <div class="results-head" id="resultsHead" hidden>
+      <span class="col col-select"></span>
+      <span class="col col-cover"></span>
+      <span class="col col-title">曲目</span>
+      <span class="col col-album">专辑</span>
+      <span class="col col-dur">时长</span>
+      <span class="col col-size">大小</span>
+      <span class="col col-src">来源</span>
+      <span class="col col-act"></span>
+    </div>
+
+    <ul class="results" id="results" role="list"></ul>
+    <p id="searchFilterEmpty" class="dl-empty" hidden>没有符合条件的歌曲。清除筛选可查看全部结果。</p>
+
+    <!-- Contextual Floating Batch Bar: Only visible when >= 1 track is selected -->
+    <div class="results-toolbar" id="resultsToolbar" hidden role="toolbar" aria-label="批量歌曲操作">
+      <span id="selectionCount" class="batch-count">0 首歌曲</span>
+      <button type="button" id="downloadSelected" class="batch-primary" disabled>下载所选</button>
+      <button type="button" id="favoriteSelected" class="neutral-btn" disabled>收藏所选</button>
+      <button type="button" id="clearSelection" class="batch-clear" hidden>取消</button>
+    </div>
+
+    <div class="placeholder" id="placeholder">
+      <div class="empty-art" aria-hidden="true">
+        <svg viewBox="0 0 160 160"><path d="M65 105V42l63-13v64M65 62l63-13"/><ellipse cx="47" cy="111" rx="18" ry="13"/><ellipse cx="110" cy="99" rx="18" ry="13"/></svg>
+      </div>
+      <div class="empty-copy">
+        <span class="eyebrow">听见喜欢，留住热爱</span>
+        <h2>下一首循环，从这里开始。</h2>
+        <p>输入歌名或歌手，先试听比较音质，再把喜欢的版本存到本地。默认搜索咪咕；上方多选音乐来源可同时比对更多版本。</p>
+      </div>
+      <div class="search-suggestions">
+        <span>试试搜索</span>
+        <button type="button" data-query="周杰伦">周杰伦 <span aria-hidden="true">↗</span></button>
+        <button type="button" data-query="陈奕迅">陈奕迅 <span aria-hidden="true">↗</span></button>
+        <button type="button" data-query="爵士">爵士 <span aria-hidden="true">↗</span></button>
+        <button type="button" data-query="纯音乐">纯音乐 <span aria-hidden="true">↗</span></button>
+      </div>
+    </div>
   </section>
+
   <section id="libraryView" aria-labelledby="libraryTitle" hidden>
-    <div class="page-heading"><div><p class="eyebrow">YOUR LOCAL COLLECTION</p><h1 id="libraryTitle">本地音乐</h1></div><button id="refreshLibrary" class="text-button" type="button">刷新文件</button></div>
-    <p class="library-directory">当前目录 <span id="libraryDirectory">正在读取…</span></p>
-    <div class="library-toolbar">
-      <label class="library-search" for="librarySearch">查找本地音乐<input id="librarySearch" type="search" placeholder="歌名、歌手或专辑" autocomplete="off"></label>
-      <label for="libraryFormat">格式<select id="libraryFormat"><option value="">全部格式</option><option value="mp3">MP3</option><option value="flac">FLAC</option><option value="wav">WAV</option><option value="m4a">M4A</option><option value="aac">AAC</option><option value="ogg">OGG</option><option value="ape">APE</option></select></label>
-      <label for="librarySort">排序<select id="librarySort"><option value="recent">最近保存</option><option value="title">歌名</option><option value="artist">歌手</option></select></label>
+    <div class="view-header">
+      <div class="view-title-group">
+        <h1 id="libraryTitle">本地音乐</h1>
+        <span id="libraryCount" class="view-count" role="status" aria-live="polite">正在读取…</span>
+      </div>
+      <div class="view-actions">
+        <button id="refreshLibrary" class="neutral-btn" type="button">刷新文件</button>
+        <button id="playLibrary" class="primary-button" type="button" disabled>
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+          <span>播放筛选结果</span>
+        </button>
+      </div>
     </div>
-    <div class="library-summary"><span id="libraryCount" role="status" aria-live="polite">正在读取…</span><button id="clearLibraryFilters" class="text-button" type="button" hidden>清除筛选</button><button id="playLibrary" class="text-button" type="button" disabled>播放筛选结果</button></div>
+
+    <div class="library-bar">
+      <p class="library-directory">目录：<span id="libraryDirectory">正在读取…</span></p>
+      <div class="library-toolbar">
+        <label class="visually-hidden" for="librarySearch">查找本地音乐</label>
+        <input id="librarySearch" class="visually-hidden" type="search" tabindex="-1" autocomplete="off">
+        <label class="inline-control" for="libraryFormat">
+          <span>格式</span>
+          <select id="libraryFormat">
+            <option value="">全部格式</option>
+            <option value="mp3">MP3</option>
+            <option value="flac">FLAC</option>
+            <option value="wav">WAV</option>
+            <option value="m4a">M4A</option>
+            <option value="aac">AAC</option>
+            <option value="ogg">OGG</option>
+            <option value="ape">APE</option>
+          </select>
+        </label>
+        <label class="inline-control" for="librarySort">
+          <span>排序</span>
+          <select id="librarySort">
+            <option value="recent">最近保存</option>
+            <option value="title">歌名</option>
+            <option value="artist">歌手</option>
+          </select>
+        </label>
+        <button id="clearLibraryFilters" class="neutral-btn" type="button" hidden>清除筛选</button>
+      </div>
+    </div>
+
     <p class="library-error" id="libraryError" role="status" hidden></p>
-    <ul class="library-list" id="libraryList"><li class="dl-empty">正在读取本地音乐…</li></ul>
+    <ul class="library-list" id="libraryList" role="list"><li class="dl-empty">正在读取本地音乐…</li></ul>
   </section>
+
   <section id="favoritesView" aria-labelledby="favoritesTitle" hidden>
-    <div class="page-heading"><div><p class="eyebrow">KEEP YOUR FAVORITES</p><h1 id="favoritesTitle">我的收藏</h1></div></div>
-    <p class="library-directory">在搜索结果勾选后收藏，或收藏正在播放的歌曲。仅保存在当前浏览器或桌面应用中，最多 200 首；收藏不会下载音乐，不保证离线播放。</p>
-    <div class="library-toolbar"><label class="library-search" for="favoritesSearch">查找收藏<input id="favoritesSearch" type="search" placeholder="歌名、歌手或专辑" autocomplete="off"></label></div>
-    <div class="library-summary"><span id="favoritesCount" role="status"></span><button id="playFavorites" class="text-button" type="button" disabled>播放筛选结果</button></div>
+    <div class="view-header">
+      <div class="view-title-group">
+        <h1 id="favoritesTitle">我的收藏</h1>
+        <span id="favoritesCount" class="view-count" role="status"></span>
+      </div>
+      <div class="view-actions">
+        <button id="playFavorites" class="primary-button" type="button" disabled>
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+          <span>播放筛选结果</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="library-bar">
+      <p class="library-directory">仅保存在当前浏览器或桌面应用中，最多 200 首；收藏不会自动下载，可使用顶部搜索框筛选收藏曲目。</p>
+      <label class="visually-hidden" for="favoritesSearch">查找收藏</label>
+      <input id="favoritesSearch" class="visually-hidden" type="search" tabindex="-1" autocomplete="off">
+    </div>
+
     <p class="library-error" id="favoritesError" role="status" hidden></p>
-    <ul class="favorites-list" id="favoritesList"></ul>
+    <ul class="favorites-list" id="favoritesList" role="list"></ul>
   </section>
+
   <section id="settingsView" aria-labelledby="settingsTitle" hidden>
-    <div class="page-heading"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h1 id="settingsTitle" tabindex="-1">设置</h1></div><button id="settingsShortcuts" class="text-button" type="button">快捷键</button></div>
-    <div class="settings-section">
-      <h2>下载</h2>
-      <label class="setting-row" for="downloadFormatPreference"><span><strong>默认下载格式</strong><small>MP3 兼容常用播放器；FLAC 仅保存原始无损。</small></span><select id="downloadFormatPreference"><option value="mp3">MP3 · 通用</option><option value="flac">原始 FLAC</option><option value="ask">每次选择</option></select></label>
-      <label class="setting-row" for="downloadNaming"><span><strong>文件命名</strong><small>只应用于新任务，已下载文件保留原名。</small></span><select id="downloadNaming"><option value="title-artist">歌名 - 歌手</option><option value="artist-title">歌手 - 歌名</option><option value="title">仅歌名</option></select></label>
-      <label class="setting-row" for="downloadLayout"><span><strong>目录结构</strong><small>按来源、按歌手，或直接保存到下载目录。</small></span><select id="downloadLayout"><option value="source">按音乐来源</option><option value="artist">按歌手</option><option value="flat">不分目录</option></select></label>
-      <p class="setting-note">下载目录、同时下载数与转换状态可在「下载任务」查看。</p>
+    <div class="view-header">
+      <div class="view-title-group">
+        <h1 id="settingsTitle" tabindex="-1">偏好设置</h1>
+      </div>
+      <div class="view-actions">
+        <button id="settingsShortcuts" class="neutral-btn" type="button">快捷键 <kbd>?</kbd></button>
+      </div>
     </div>
-    <div class="settings-section">
-      <h2>播放</h2>
-      <label class="setting-row" for="rememberPosition"><span><strong>记住播放位置</strong><small>重新打开后保持暂停，手动播放时从上次位置继续。</small></span><input id="rememberPosition" type="checkbox" checked></label>
-      <label class="setting-row cache-toggle" for="cacheToggle"><span><strong>缓存已播放歌曲</strong><small>减少重复加载。临时缓存会自动清理，长期保留请下载。</small></span><input id="cacheToggle" type="checkbox"></label>
-      <label class="setting-row" for="cacheLimit"><span><strong>缓存上限</strong><small>下次缓存播放或写入完成后清理。</small></span><select id="cacheLimit"><option value="512">512 MB</option><option value="1024" selected>1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option></select></label>
-      <button id="cacheManage" class="text-button" type="button" aria-controls="cachePanel" aria-expanded="false">管理播放缓存 →</button>
-    </div>
-    <div class="settings-section">
-      <h2>关于声轨 <span id="appVersion"></span></h2>
-      <label class="setting-row" for="autoUpdate"><span><strong>启动时检查更新</strong><small>只检查 GitHub 的正式版本，下载与安装由你决定。</small></span><input id="autoUpdate" type="checkbox" checked></label>
-      <p id="updateStatus" class="setting-note" role="status">正在读取版本…</p>
-      <div class="settings-actions"><button id="checkUpdate" type="button">检查更新</button><a id="releaseLink" href="https://github.com/LiuKay/musicdl-soundtrack/releases" target="_blank" rel="noopener noreferrer">前往发布页 ↗</a></div>
+
+    <div class="settings-grid">
+      <div class="settings-card">
+        <h2>外观</h2>
+        <label class="setting-row" for="themePreference">
+          <span>
+            <strong>界面主题</strong>
+            <small>默认跟随系统浅色或深色外观，也可在此固定主题。</small>
+          </span>
+          <select id="themePreference">
+            <option id="themeSystemOption" value="system">跟随系统</option>
+            <option value="light">浅色模式</option>
+            <option value="dark">深色模式</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="settings-card">
+        <h2>下载</h2>
+        <label class="setting-row" for="downloadFormatPreference">
+          <span><strong>默认下载格式</strong><small>MP3 兼容常用播放器；FLAC 仅保存原始无损。</small></span>
+          <select id="downloadFormatPreference"><option value="mp3">MP3 · 通用</option><option value="flac">原始 FLAC</option><option value="ask">每次选择</option></select>
+        </label>
+        <label class="setting-row" for="downloadNaming">
+          <span><strong>文件命名</strong><small>只应用于新任务，已下载文件保留原名。</small></span>
+          <select id="downloadNaming"><option value="title-artist">歌名 - 歌手</option><option value="artist-title">歌手 - 歌名</option><option value="title">仅歌名</option></select>
+        </label>
+        <label class="setting-row" for="downloadLayout">
+          <span><strong>目录结构</strong><small>按来源、按歌手，或直接保存到下载目录。</small></span>
+          <select id="downloadLayout"><option value="source">按音乐来源</option><option value="artist">按歌手</option><option value="flat">不分目录</option></select>
+        </label>
+        <p class="setting-note">下载目录、同时下载数与转换状态可在右上角「任务」面板查看。</p>
+      </div>
+
+      <div class="settings-card">
+        <h2>播放与缓存</h2>
+        <label class="setting-row" for="rememberPosition">
+          <span><strong>记住播放位置</strong><small>重新打开后保持暂停，手动播放时从上次位置继续。</small></span>
+          <input id="rememberPosition" type="checkbox" checked>
+        </label>
+        <label class="setting-row" for="cacheToggle">
+          <span><strong>缓存已播放歌曲</strong><small>减少重复加载。临时缓存会自动清理，长期保留请下载。</small></span>
+          <input id="cacheToggle" type="checkbox">
+        </label>
+        <label class="setting-row" for="cacheLimit">
+          <span><strong>缓存上限</strong><small>下次缓存播放或写入完成后清理。</small></span>
+          <select id="cacheLimit"><option value="512">512 MB</option><option value="1024" selected>1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option></select>
+        </label>
+        <div class="settings-actions">
+          <button id="cacheManage" class="neutral-btn" type="button" aria-controls="cachePanel" aria-expanded="false">管理播放缓存 →</button>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <h2>关于声轨 <span id="appVersion"></span></h2>
+        <label class="setting-row" for="autoUpdate">
+          <span><strong>启动时检查更新</strong><small>只检查 GitHub 的正式版本，下载与安装由你决定。</small></span>
+          <input id="autoUpdate" type="checkbox" checked>
+        </label>
+        <p id="updateStatus" class="setting-note" role="status">正在读取版本…</p>
+        <div class="settings-actions">
+          <button id="checkUpdate" class="neutral-btn" type="button">检查更新</button>
+          <a id="releaseLink" href="https://github.com/LiuKay/musicdl-soundtrack/releases" target="_blank" rel="noopener noreferrer">前往发布页 ↗</a>
+        </div>
+      </div>
     </div>
   </section>
 </main>
 
-<!-- Lyrics panel -->
-<aside class="lyrics-panel" id="lyricsPanel" aria-label="歌词" inert>
-  <div class="lyrics-head">
-    <span>歌词</span>
-    <button id="lyricsClose" aria-label="关闭歌词">✕</button>
+<!-- Immersive Dual-Column Now Playing & Lyrics Stage -->
+<aside class="lyrics-panel" id="lyricsPanel" aria-label="沉浸播放与歌词舞台" inert>
+  <div class="stage-ambient" id="stageAmbient" aria-hidden="true"></div>
+  <div class="stage-head">
+    <div class="stage-badges">
+      <span class="badge-pill badge-lossless" id="stageQuality" hidden></span>
+      <span class="stage-source" id="stageSource">正在播放</span>
+    </div>
+    <button id="lyricsClose" class="neutral-btn stage-close" type="button" aria-label="收起歌词舞台">
+      <span>收起</span>
+      <span aria-hidden="true">▾</span>
+    </button>
   </div>
-  <div class="lyrics-scroll" id="lyricsScroll"></div>
+
+  <div class="stage-body">
+    <div class="stage-left">
+      <div class="stage-cover" id="stageCover">
+        <div class="np-cover-fallback">♪</div>
+      </div>
+      <div class="stage-meta">
+        <h2 id="stageTitle">未在播放</h2>
+        <p id="stageArtist">选择一首歌开始</p>
+      </div>
+      <canvas class="viz" id="viz" width="240" height="44" aria-hidden="true"></canvas>
+      <div class="stage-controls">
+        <button id="stagePrevBtn" class="t-btn" type="button" aria-label="上一首">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M7 5v14M19 5L9 12l10 7z" fill="currentColor"/></svg>
+        </button>
+        <button id="stagePlayBtn" class="t-btn play" type="button" aria-label="播放或暂停">
+          <svg class="stage-ic-play" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+          <svg class="stage-ic-pause" viewBox="0 0 24 24" width="22" height="22" hidden aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/></svg>
+        </button>
+        <button id="stageNextBtn" class="t-btn" type="button" aria-label="下一首">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M17 5v14M5 5l10 7L5 19z" fill="currentColor"/></svg>
+        </button>
+        <button id="stageDownloadBtn" class="neutral-btn stage-dl-btn" type="button" disabled>下载此版本</button>
+      </div>
+    </div>
+
+    <div class="stage-right">
+      <div class="lyrics-scroll" id="lyricsScroll"></div>
+    </div>
+  </div>
 </aside>
 
-<!-- Downloads drawer -->
+<!-- Downloads Inspector Drawer -->
 <aside class="dl-drawer" id="dlDrawer" aria-label="下载任务" inert>
-  <div class="dl-head">
-    <span>下载任务</span>
-    <button id="dlClose" aria-label="关闭下载面板">✕</button>
+  <div class="inspector-head">
+    <div class="inspector-tabs" role="tablist" aria-label="侧栏面板切换">
+      <button type="button" role="tab" aria-selected="false" class="inspector-tab" data-switch-panel="queuePanel">播放队列</button>
+      <button type="button" role="tab" aria-selected="true" class="inspector-tab">下载任务</button>
+    </div>
+    <button id="dlClose" type="button" aria-label="关闭下载面板">✕</button>
   </div>
+
   <div class="dl-folder">
     <div>
       <span class="dl-folder-label">下载目录</span>
       <span class="dl-folder-path" id="downloadDir">~/Downloads/Soundtrack</span>
     </div>
-    <button id="chooseDownloadDir" type="button" hidden>选择</button>
+    <button id="chooseDownloadDir" class="neutral-btn" type="button" hidden>选择</button>
   </div>
+
   <label class="dl-concurrency" for="downloadConcurrency">
     <span>同时下载</span>
     <select id="downloadConcurrency" aria-label="同时下载歌曲数">
@@ -166,6 +400,7 @@
       <option value="5">5 首</option>
     </select>
   </label>
+
   <details class="conversion-help">
     <summary>MP3 转换 <span id="conversionStatus" role="status">正在检测…</span></summary>
     <p id="conversionHelp">桌面版内置转换功能，无需额外安装。原始 MP3 直接保存，其他支持的音频可转为 MP3；转换不会提升音质。</p>
@@ -175,39 +410,48 @@
       <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener noreferrer">FFmpeg 官方下载说明</a>
     </div>
     <p>内置转换使用 FFmpeg 和 LAME；许可与对应源码说明见应用内 audio-tools/licenses 目录及项目 Release 附件。</p>
-    <button id="checkConversion" type="button">重新检测</button>
+    <button id="checkConversion" class="neutral-btn" type="button">重新检测</button>
   </details>
+
   <div class="dl-scroll">
     <p class="dl-exit-notice" id="downloadExitNotice" role="status">关闭此页面不会停止已提交的任务，但请保持后台程序运行。停止后台后，未完成任务需要重新添加。</p>
     <p class="dl-exit-notice" id="downloadHistoryNotice" role="status" hidden></p>
     <section class="dl-section">
-      <div class="dl-section-title">下载任务 <button id="retryFailed" type="button" disabled>重试失败项</button></div>
-      <ul class="dl-list" id="dlList">
+      <div class="dl-section-title">进行中与失败 <button id="retryFailed" class="neutral-btn" type="button" disabled>重试失败项</button></div>
+      <ul class="dl-list" id="dlList" role="list">
         <li class="dl-empty">暂无下载任务</li>
       </ul>
     </section>
     <section class="dl-section">
       <div class="dl-section-title">最近完成 <small>本次运行</small></div>
-      <ul class="dl-list" id="recentList"><li class="dl-empty">完成后可在这里找到文件</li></ul>
+      <ul class="dl-list" id="recentList" role="list"><li class="dl-empty">完成后可在这里找到文件</li></ul>
     </section>
   </div>
   <button id="openLocalLibrary" class="drawer-library-link" type="button">查看本地音乐 →</button>
 </aside>
 
+<!-- Queue Inspector Drawer -->
 <aside class="queue-panel" id="queuePanel" aria-label="播放队列" inert>
-  <div class="lyrics-head"><span>播放队列 <small id="queueCount">0</small></span><button id="queueClose" aria-label="关闭播放队列">✕</button></div>
-  <div class="queue-heading"><span>搜索不会打断此列表</span><button id="clearQueue" type="button">清空待播</button></div>
-  <div class="queue-heading"><span id="queueSaveStatus" role="status">自动保留前 200 首，恢复后暂停</span><button id="clearAllQueue" type="button">清空全部并停止</button></div>
-  <ol id="queueList" class="queue-list"></ol>
+  <div class="inspector-head">
+    <div class="inspector-tabs" role="tablist" aria-label="侧栏面板切换">
+      <button type="button" role="tab" aria-selected="true" class="inspector-tab">播放队列 <small id="queueCount">0</small></button>
+      <button type="button" role="tab" aria-selected="false" class="inspector-tab" data-switch-panel="dlDrawer">下载任务</button>
+    </div>
+    <button id="queueClose" type="button" aria-label="关闭播放队列">✕</button>
+  </div>
+  <div class="queue-heading"><span>搜索不会打断此列表</span><button id="clearQueue" class="neutral-btn" type="button">清空待播</button></div>
+  <div class="queue-heading"><span id="queueSaveStatus" role="status">自动保留前 200 首，恢复后暂停</span><button id="clearAllQueue" class="neutral-btn" type="button">清空并停止</button></div>
+  <ol id="queueList" class="queue-list" role="list"></ol>
 </aside>
 
+<!-- Cache Drawer -->
 <aside class="cache-panel" id="cachePanel" aria-label="播放缓存" inert>
-  <div class="lyrics-head"><span>播放缓存</span><button id="cacheClose" aria-label="关闭缓存面板">✕</button></div>
+  <div class="lyrics-head"><span>播放缓存</span><button id="cacheClose" type="button" aria-label="关闭缓存面板">✕</button></div>
   <div class="cache-body">
     <p class="eyebrow">临时留存，自动腾出空间</p>
     <p class="cache-usage" id="cacheUsage">正在读取…</p>
     <p id="cacheStatus" class="cache-status" role="status" aria-live="polite"></p>
-    <div class="cache-actions"><button id="refreshCache" type="button">刷新占用</button><button id="clearCache" type="button" disabled>清理缓存</button></div>
+    <div class="cache-actions"><button id="refreshCache" class="neutral-btn" type="button">刷新占用</button><button id="clearCache" class="batch-primary" type="button" disabled>清理缓存</button></div>
     <h3>缓存和下载有什么不同？</h3>
     <p>开启后，开始播放会在后台尝试缓存整首歌曲。缓存成功后可减少重复加载，但不会加入本地音乐，也不保证离线可用。需要长期保留，请点击歌曲的下载按钮。</p>
     <h3>何时自动清理？</h3>
@@ -216,45 +460,78 @@
   </div>
 </aside>
 
-<!-- Now playing bar -->
+<!-- Redesigned Closed-Loop Now Playing Bar -->
 <footer class="player" id="player" data-empty="true" tabindex="-1" aria-label="播放器">
   <div class="np-meta">
-    <div class="np-cover" id="npCover"><div class="np-cover-fallback">♪</div></div>
-    <div class="np-text">
-      <div class="np-title" id="npTitle">未在播放</div>
+    <button class="np-cover-btn" id="npCoverBtn" type="button" aria-label="展开或收起歌词舞台" aria-expanded="false">
+      <div class="np-cover" id="npCover"><div class="np-cover-fallback">♪</div></div>
+      <span class="np-expand-hint" aria-hidden="true">⌃</span>
+    </button>
+    <div class="np-text" id="npTextTrigger">
+      <div class="np-title-row">
+        <div class="np-title" id="npTitle">未在播放</div>
+        <span class="badge-pill badge-lossless np-quality" id="npQuality" hidden></span>
+      </div>
       <div class="np-artist" id="npArtist">选择一首歌开始</div>
     </div>
-    <button class="np-lyric-btn" id="lyricsToggle" title="歌词" aria-label="显示歌词" aria-controls="lyricsPanel" aria-expanded="false">词</button>
-    <button class="np-favorite-btn" id="favoriteCurrent" type="button" aria-label="收藏当前歌曲" aria-pressed="false" disabled>☆</button>
+    <div class="np-quick-actions">
+      <button class="np-favorite-btn" id="favoriteCurrent" type="button" aria-label="收藏当前歌曲" aria-pressed="false" disabled>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 20.5s-7-4.35-7-10.1A4.4 4.4 0 0 1 9.4 6c1.4 0 2.6.68 2.6.68S13.2 6 14.6 6A4.4 4.4 0 0 1 19 10.4c0 5.75-7 10.1-7 10.1Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="np-download-btn" id="downloadCurrent" type="button" aria-label="下载当前歌曲" disabled>
+        <svg class="ic-dl-ready" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg class="ic-dl-done" viewBox="0 0 24 24" width="18" height="18" hidden aria-hidden="true"><path d="m5 13 4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
   </div>
 
   <div class="np-center">
     <div class="transport">
-      <button id="shuffleBtn" class="t-btn mode-btn" aria-label="随机播放" title="随机播放" aria-pressed="false"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 6h3c4 0 8 12 12 12h3m-4-4 4 4-4 4M3 18h3c1.5 0 3-2 4-4m4-4c1-2 2.5-4 4-4h3m-4-4 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-      <button id="prevBtn" class="t-btn" aria-label="上一首"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M7 5v14M19 5L9 12l10 7z" fill="currentColor"/></svg></button>
-      <button id="playBtn" class="t-btn play" aria-label="播放/暂停">
-        <svg class="ic-play" viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
-        <svg class="ic-pause" viewBox="0 0 24 24" width="22" height="22" hidden><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/></svg>
+      <button id="shuffleBtn" class="t-btn mode-btn" type="button" aria-label="随机播放" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M3 6h3c4 0 8 12 12 12h3m-4-4 4 4-4 4M3 18h3c1.5 0 3-2 4-4m4-4c1-2 2.5-4 4-4h3m-4-4 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <button id="nextBtn" class="t-btn" aria-label="下一首"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M17 5v14M5 5l10 7L5 19z" fill="currentColor"/></svg></button>
-      <button id="repeatBtn" class="t-btn mode-btn" aria-label="顺序播放" title="顺序播放" aria-pressed="false" data-mode="off"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m17 2 4 4-4 4M3 11V8a2 2 0 0 1 2-2h16M7 22l-4-4 4-4m14-1v3a2 2 0 0 1-2 2H3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="repeat-one" aria-hidden="true">1</span></button>
+      <button id="prevBtn" class="t-btn" type="button" aria-label="上一首">
+        <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M7 5v14M19 5L9 12l10 7z" fill="currentColor"/></svg>
+      </button>
+      <button id="playBtn" class="t-btn play" type="button" aria-label="播放/暂停">
+        <svg class="ic-play" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+        <svg class="ic-pause" viewBox="0 0 24 24" width="20" height="20" hidden aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/></svg>
+      </button>
+      <button id="nextBtn" class="t-btn" type="button" aria-label="下一首">
+        <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M17 5v14M5 5l10 7L5 19z" fill="currentColor"/></svg>
+      </button>
+      <button id="repeatBtn" class="t-btn mode-btn" type="button" aria-label="顺序播放" aria-pressed="false" data-mode="off">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="m17 2 4 4-4 4M3 11V8a2 2 0 0 1 2-2h16M7 22l-4-4 4-4m14-1v3a2 2 0 0 1-2 2H3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="repeat-one" aria-hidden="true">1</span>
+      </button>
     </div>
     <div class="seek">
       <span class="time" id="curTime">0:00</span>
-      <div class="seek-track" id="seekTrack" role="slider" tabindex="0" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="seek-fill" id="seekFill"></div><div class="seek-knob" id="seekKnob"></div></div>
+      <div class="seek-track" id="seekTrack" role="slider" tabindex="0" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="seek-fill" id="seekFill"></div>
+        <div class="seek-knob" id="seekKnob"></div>
+      </div>
       <span class="time" id="durTime">0:00</span>
     </div>
   </div>
 
   <div class="np-right">
-    <canvas class="viz" id="viz" width="220" height="44" aria-hidden="true"></canvas>
+    <button class="dock-btn np-lyric-btn" id="lyricsToggle" type="button" aria-label="显示歌词舞台" aria-controls="lyricsPanel" aria-expanded="false">
+      <span>歌词</span>
+    </button>
+    <button class="dock-btn queue-toggle" id="queueToggle" type="button" aria-label="显示播放队列" aria-controls="queuePanel" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M9 6h12M9 12h12M9 18h12M3 6h1M3 12h1M3 18h1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span id="dockQueueCount" class="dock-count">0</span>
+    </button>
     <div class="vol">
-      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 9v6h4l5 5V4L8 9H4z" fill="currentColor"/></svg>
-      <div class="vol-track" id="volTrack" role="slider" tabindex="0" aria-label="音量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="75"><div class="vol-fill" id="volFill"></div></div>
+      <button class="vol-mute-btn" id="volMuteBtn" type="button" aria-label="静音切换" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 9v6h4l5 5V4L8 9H4z" fill="currentColor"/><path class="vol-wave" d="M16 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+      </button>
+      <div class="vol-track" id="volTrack" role="slider" tabindex="0" aria-label="音量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="75">
+        <div class="vol-fill" id="volFill"></div>
+      </div>
     </div>
   </div>
-
-  <button class="queue-toggle" id="queueToggle" aria-label="显示播放队列" aria-controls="queuePanel" aria-expanded="false" title="播放队列"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9 6h12M9 12h12M9 18h12M3 6h1M3 12h1M3 18h1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
 </footer>
 
 <dialog class="format-dialog" id="downloadFormatDialog" aria-labelledby="downloadFormatTitle" aria-describedby="downloadFormatTrack downloadFormatHelp">
@@ -270,11 +547,12 @@
     <div class="format-actions"><button type="button" id="downloadFormatCancel">取消</button><button class="format-confirm" id="downloadFormatConfirm" value="download">下载</button></div>
   </form>
 </dialog>
+
 <dialog class="format-dialog plan-dialog" id="downloadPlanDialog" aria-labelledby="downloadPlanTitle" aria-describedby="downloadPlanSummary">
   <form method="dialog">
     <div class="format-heading"><h2 id="downloadPlanTitle">确认下载</h2><button type="button" id="downloadPlanClose" aria-label="关闭下载确认">✕</button></div>
     <p class="format-help" id="downloadPlanSummary"></p>
-    <ul class="download-plan-list" id="downloadPlanList"></ul>
+    <ul class="download-plan-list" id="downloadPlanList" role="list"></ul>
     <div class="format-actions">
       <button value="cancel">取消</button>
       <button id="downloadPlanCopy" value="copy" hidden>全部另存一份</button>
@@ -282,6 +560,7 @@
     </div>
   </form>
 </dialog>
+
 <dialog class="format-dialog" id="cacheClearDialog" aria-labelledby="cacheClearTitle" aria-describedby="cacheClearHelp">
   <form method="dialog">
     <div class="format-heading"><h2 id="cacheClearTitle">清理播放缓存？</h2></div>
@@ -289,6 +568,7 @@
     <div class="format-actions"><button value="cancel" autofocus>取消</button><button class="format-confirm" value="clear">确认清理</button></div>
   </form>
 </dialog>
+
 <dialog class="format-dialog" id="musicTrashDialog" aria-labelledby="musicTrashName" aria-describedby="musicTrashHelp">
   <form method="dialog">
     <div class="format-heading"><h2 id="musicTrashName">移至废纸篓？</h2></div>
@@ -296,12 +576,24 @@
     <div class="format-actions"><button value="cancel" autofocus>取消</button><button class="format-confirm" value="trash">移至废纸篓</button></div>
   </form>
 </dialog>
+
 <dialog class="format-dialog shortcuts-dialog" id="shortcutsDialog" aria-labelledby="shortcutsTitle">
   <div class="format-heading"><h2 id="shortcutsTitle">快捷键</h2><button id="shortcutsClose" type="button" aria-label="关闭快捷键帮助">✕</button></div>
-  <dl><div><dt>搜索</dt><dd><kbd>/</kbd> 或 <kbd>⌘ / Ctrl K</kbd></dd></div><div><dt>选择上一首 / 下一首结果</dt><dd><kbd>↑</kbd> <kbd>↓</kbd></dd></div><div><dt>播放所指歌曲</dt><dd><kbd>Enter</kbd></dd></div><div><dt>下载 / 收藏所指歌曲</dt><dd><kbd>D</kbd> <kbd>F</kbd></dd></div><div><dt>播放 / 暂停</dt><dd><kbd>Space</kbd></dd></div><div><dt>上一首 / 下一首</dt><dd><kbd>Alt ←</kbd> <kbd>Alt →</kbd></dd></div><div><dt>关闭面板</dt><dd><kbd>Esc</kbd></dd></div><div><dt>打开帮助</dt><dd><kbd>?</kbd></dd></div></dl>
+  <dl>
+    <div><dt>全局搜索</dt><dd><kbd>/</kbd> 或 <kbd>⌘ / Ctrl K</kbd></dd></div>
+    <div><dt>选择上一首 / 下一首结果</dt><dd><kbd>↑</kbd> <kbd>↓</kbd></dd></div>
+    <div><dt>播放所指歌曲</dt><dd><kbd>Enter</kbd></dd></div>
+    <div><dt>下载 / 收藏所指歌曲</dt><dd><kbd>D</kbd> <kbd>F</kbd></dd></div>
+    <div><dt>播放 / 暂停</dt><dd><kbd>Space</kbd></dd></div>
+    <div><dt>上一首 / 下一首</dt><dd><kbd>Alt ←</kbd> <kbd>Alt →</kbd></dd></div>
+    <div><dt>收起舞台或侧边面板</dt><dd><kbd>Esc</kbd></dd></div>
+    <div><dt>打开帮助</dt><dd><kbd>?</kbd></dd></div>
+  </dl>
   <p class="setting-note">在列表空白处使用歌曲快捷键。输入文字、操作按钮和调节滑块时保留原有键盘行为。</p>
 </dialog>
+
 <audio id="audio" crossorigin="anonymous"></audio>
+
 <div id="trackMenu" class="track-menu" role="menu" aria-label="歌曲操作" hidden>
   <p id="trackMenuTitle"></p>
   <button type="button" role="menuitem" data-track-action="play">播放</button>
@@ -312,7 +604,9 @@
   <button type="button" role="menuitem" data-track-action="research" aria-expanded="false">在其他来源搜索 ›</button>
   <div id="trackMenuSources" role="group" aria-label="选择音乐来源" hidden></div>
 </div>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
 <script src="/static/session.js"></script>
 <script src="/static/favorites.js"></script>
 <script src="/static/search-model.js"></script>

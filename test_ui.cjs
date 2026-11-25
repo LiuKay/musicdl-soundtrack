@@ -1032,3 +1032,89 @@ test('playing a filtered library uses a snapshot without including hidden tracks
   rows[0].ondblclick({ target: { closest: selector => selector.includes('a') } });
   assert.equal(calls.length, 1, 'saving a file must not start playback');
 });
+
+test('contextual batch toolbar stays hidden until tracks are selected while search header actions show', () => {
+  const nodes = new Map();
+  const $ = id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
+  const selected = new Set();
+  const run = () => helper('updateSelection', {
+    $, queue: ['a', 'b'], visibleSearchTokens: ['a', 'b'], selectedTokens: selected, batchDownloading: false
+  })();
+  run();
+  assert.equal($('#searchHeadActions').hidden, false);
+  assert.equal($('#resultsToolbar').hidden, true);
+  selected.add('a');
+  run();
+  assert.equal($('#resultsToolbar').hidden, false);
+  assert.match($('#selectionCount').textContent, /已选 1 首/);
+});
+
+test('now-playing download control reflects empty, streaming and saved states', () => {
+  const readyIcon = element(), doneIcon = element();
+  const dlBtn = { ...element(), querySelector: sel => sel === '.ic-dl-ready' ? readyIcon : doneIcon };
+  const stageBtn = element();
+  const $ = id => id === '#downloadCurrent' ? dlBtn : id === '#stageDownloadBtn' ? stageBtn : null;
+  const tracks = new Map();
+  const downloaded = new Set();
+  const run = token => helper('updateDownloadCurrent', {
+    $, tracks, currentToken: token, downloadedSearchTokens: downloaded
+  })();
+  run(null);
+  assert.equal(dlBtn.disabled, true);
+  tracks.set('remote', { song_name: '夜航', pendingResolution: false });
+  run('remote');
+  assert.equal(dlBtn.disabled, false);
+  assert.equal(dlBtn.classList.contains('is-downloaded'), false);
+  assert.equal(readyIcon.attributes.has('hidden'), false);
+  assert.equal(doneIcon.attributes.has('hidden'), true);
+  assert.match(dlBtn.getAttribute('aria-label'), /下载 夜航/);
+  downloaded.add('remote');
+  run('remote');
+  assert.equal(dlBtn.classList.contains('is-downloaded'), true);
+  assert.equal(readyIcon.attributes.has('hidden'), true);
+  assert.equal(doneIcon.attributes.has('hidden'), false);
+  assert.match(stageBtn.textContent, /已在本地音乐/);
+});
+
+test('color-scheme preference syncs meta tag and removes storage entry when reverting to system', () => {
+  const store = new Map();
+  const meta = { content: 'light dark' };
+  const select = { value: 'system' };
+  const apply = helper('applyThemePreference', {
+    themeStorageKey: 'soundtrack-color-scheme',
+    themePreference: select,
+    document: { querySelector: () => meta },
+    localStorage: {
+      setItem: (k, v) => store.set(k, v),
+      removeItem: k => store.delete(k)
+    },
+    toast() {}
+  });
+  apply('dark', true);
+  assert.equal(meta.content, 'dark');
+  assert.equal(select.value, 'dark');
+  assert.equal(store.get('soundtrack-color-scheme'), 'dark');
+  apply('system', true);
+  assert.equal(meta.content, 'light dark');
+  assert.equal(select.value, 'system');
+  assert.equal(store.has('soundtrack-color-scheme'), false);
+});
+
+test('unified top search input switches context across views while preserving online search draft', () => {
+  const nodes = {
+    '#searchInput': { value: '', placeholder: '' },
+    '#searchBtn': { hidden: false },
+    '#librarySearch': { value: 'flac live' },
+    '#favoritesSearch': { value: '林间' }
+  };
+  const sync = helper('syncSearchBarForView', { $: id => nodes[id], onlineSearchDraft: '夜航' });
+  sync('library');
+  assert.equal(nodes['#searchInput'].value, 'flac live');
+  assert.equal(nodes['#searchBtn'].hidden, true);
+  sync('favorites');
+  assert.equal(nodes['#searchInput'].value, '林间');
+  assert.equal(nodes['#searchBtn'].hidden, true);
+  sync('search');
+  assert.equal(nodes['#searchInput'].value, '夜航');
+  assert.equal(nodes['#searchBtn'].hidden, false);
+});
